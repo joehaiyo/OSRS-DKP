@@ -107,6 +107,10 @@ async def on_ready():
     logging.info(f"Bot connected to Discord gateway successfully as {bot.user.name}")
 
 # --- COMMANDS ---
+from discord.ext import commands
+from typing import Union
+import discord
+
 @bot.command(name="attendance")
 @commands.has_permissions(administrator=True)
 async def attendance(ctx, target: Union[discord.VoiceChannel, discord.Role], event_type: str, base_points: int):
@@ -115,6 +119,38 @@ async def attendance(ctx, target: Union[discord.VoiceChannel, discord.Role], eve
         valid_types = ", ".join(EVENT_MULTIPLIERS.keys())
         await ctx.send(f"❌ Invalid event type. Choose from: `{valid_types}`")
         return
+    
+    # Rest of your existing attendance logic here...
+
+
+# --- ERROR HANDLER FOR ATTENDANCE ---
+@attendance.error
+async def attendance_error(ctx, error):
+    # Handle case where Discord cannot convert the "target" argument
+    if isinstance(error, commands.BadUnionArgument):
+        await ctx.send(
+            "❌ **Invalid Target!** Could not find a Voice Channel or Role matching your input.\n"
+            "**Usage:** `!attendance <Voice Channel or Role> <event_type> <points>`\n"
+            "**Examples:**\n"
+            "• `!attendance \"General Voice\" bossing 10` *(Use quotes for channels with spaces)*\n"
+            "• `!attendance @Raiders bossing 10` *(Mentioning a Role)*"
+        )
+    
+    # Handle case where user misses one of the required arguments
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(
+            f"❌ **Missing Argument:** `{error.param.name}` is required!\n"
+            "**Usage:** `!attendance <Voice Channel or Role> <event_type> <points>`"
+        )
+        
+    # Handle permission errors
+    elif isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You do not have the required permissions (Administrator) to run this command.")
+        
+    # Catch-all for any other command errors
+    else:
+        await ctx.send(f"⚠️ An unexpected error occurred: `{error}`")
+
 
     multiplier = EVENT_MULTIPLIERS[event_type]
     final_points = round(base_points * multiplier)
