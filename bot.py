@@ -329,22 +329,24 @@ async def stopevent(ctx):
     
 @bot.command(name="helpmenu")
 async def helpmenu(ctx):
+    """Displays a filtered, up-to-date guide for all active DKP system commands."""
     embed = discord.Embed(
-        title="🤖 Clan DKP Bot Command Guide", 
+        title="⚔️ Old School RuneScape Clan DKP Bot Guide", 
         color=discord.Color.blue()
     )
     
-    # Check if the user running the command is an Admin
+    # Check if the user running the command is an Administrator
     is_admin = ctx.author.guild_permissions.administrator
 
     if is_admin:
         admin_desc = (
-            "**!startevent <type> <pts> <code>**\n"
-            "Opens a 15-minute code check-in window.\n"
-            "*Example:* `!startevent bossing 50 raid123`\n\n"
+            "**!startevent <type> <pts> <days> <code>**\n"
+            "Opens a multi-day event window for self check-ins.\n"
+            "*Example:* `!startevent bossing 40 7 cox_week`\n\n"
+            "**!stopevent**\n"
+            "Manually terminates the current long-term event early.\n\n"
             "**!attendance <target> <type> <pts>**\n"
-            "Instantly awards points to a target.\n"
-            "*Targets:* @Member, @Role, or \"VC Name\"\n"
+            "Instantly awards points to an @Member, @Role, or \"VC Name\".\n"
             "*Example:* `!attendance @Raiders bossing 40`\n\n"
             "**!award <@member> <pts> [reason]**\n"
             "Manually adds points to one specific player."
@@ -353,16 +355,21 @@ async def helpmenu(ctx):
 
     public_desc = (
         "**!checkin <code>**\n"
-        "Claim your own points during an active event.\n"
-        "*Example:* `!checkin raid123`\n\n"
-        "**!spend <amount> <item>**\n"
-        "Deducts points from your balance to buy a reward.\n\n"
+        "Claim your own event points using an active secret code.\n"
+        "*Example:* `!checkin cox_week`\n\n"
+        "**!buyrank <tier>**\n"
+        "Spend DKP to unlock an OSRS Clan Rank role.\n"
+        "*Example:* `!buyrank mithril`\n\n"
         "**!dkp [@member]**\n"
         "Checks your point balance (or a tagged user's).\n\n"
         "**!leaderboard**\n"
         "Displays the top 10 highest-ranked clan members."
     )
     embed.add_field(name="👤 Member Commands", value=public_desc, inline=False)
+    
+    # Dynamically lists all the OSRS scimitar tiers and their math balances
+    shop_list = "\n".join([f"• **{info['name']}** — `{info['cost']} DKP`" for info in RANK_TIERS.values()])
+    embed.add_field(name="⚔️ Scimitar Rank Shop Prices", value=shop_list, inline=False)
     
     embed.set_footer(text="Valid event types: skilling, bossing, bingo, custom")
     await ctx.send(embed=embed)
