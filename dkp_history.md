@@ -1,3 +1,5 @@
+## [2026-08-28 19:24] Roster Signup: Joehaiyo joined campaign 'wildly bosses'
+
 ## [2026-08-28 18:55] Checkin: Joehaiyo +50
 
 ## [2026-08-28 18:54] Checkin: Punch +50
