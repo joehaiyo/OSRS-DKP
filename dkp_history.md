@@ -1,3 +1,5 @@
+## [2026-08-28 06:23] Award: Joehaiyo +10 DKP (so cool)
+
 ## [2026-08-28 06:22] Event via Joehaiyo. Given 15 DKP to: Joehaiyo
 
 ## [2026-08-28 05:37] Spent: Joehaiyo -175 DKP on Dragon Sword Rank
