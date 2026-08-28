@@ -179,6 +179,9 @@ active_event = {
 @bot.command(name="startevent")
 @commands.has_permissions(administrator=True)
 async def startevent(ctx, event_type: str, base_points: int, secret_code: str):
+
+    global active_event
+    
     event_type = event_type.lower()
     if event_type not in EVENT_MULTIPLIERS:
         await ctx.send("❌ Invalid event type.")
