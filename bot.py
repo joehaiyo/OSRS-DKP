@@ -45,7 +45,8 @@ active_event = {
     "final_points": 0,
     "event_type": None,
     "end_timestamp": 0,
-    "claimed_users": set()
+    "claimed_users": set(),
+    "registered_users": []  # Tracks signups specifically for this event
 }
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -159,11 +160,56 @@ async def startevent(ctx, event_type: str, base_points: int, duration_days: int,
     active_event["event_type"] = event_type
     active_event["end_timestamp"] = expiration_epoch
     active_event["claimed_users"] = set()
+    active_event["registered_users"] = []  # Clear registration list for new event
 
     display_time = datetime.fromtimestamp(expiration_epoch).strftime('%Y-%m-%d %H:%M UTC')
     embed = discord.Embed(title="📢 Long-Term Event Open!", color=discord.Color.orange())
-    embed.description = f"👉 Type **`!checkin {secret_code}`** to claim.\n🚨 **Deadline:** Active until `{display_time}`."
+    embed.description = (
+        f"👉 Type **`!registerevent`** to sign up for this event list.\n"
+        f"👉 Type **`!checkin {secret_code}`** to claim points.\n"
+        f"🚨 **Deadline:** Active until `{display_time}`."
+    )
     embed.add_field(name="Points Available", value=f"**{active_event['final_points']} DKP**")
+    await ctx.send(embed=embed)
+
+@bot.command(name="registerevent")
+async def registerevent(ctx):
+    """Allows members to register their intent to join the currently running active event."""
+    global active_event
+    if not active_event["secret_code"]:
+        await ctx.send("❌ There is no active event running to register for.")
+        return
+        
+    u_id = str(ctx.author.id)
+    if u_id in active_event["registered_users"]:
+        await ctx.send("⚠️ You are already signed up for this active event roster!")
+        return
+
+    active_event["registered_users"].append(u_id)
+    await ctx.send(f"✅ **{ctx.author.display_name}**, you are signed up for the current event roster!")
+
+@bot.command(name="vieweventmembers")
+@commands.has_permissions(administrator=True)
+async def vieweventmembers(ctx):
+    """Lists every user who registered for the active event roster."""
+    global active_event
+    if not active_event["secret_code"]:
+        await ctx.send("⚠️ No active event running.")
+        return
+
+    user_ids = active_event["registered_users"]
+    if not user_ids:
+        await ctx.send(f"📋 The registration list for code `{active_event['secret_code']}` is empty.")
+        return
+
+    embed = discord.Embed(title=f"📋 Event Roster: {active_event['secret_code'].upper()}", color=discord.Color.blue())
+    member_list_text = ""
+    for idx, u_id in enumerate(user_ids, start=1):
+        m = ctx.guild.get_member(int(u_id))
+        name = m.display_name if m else f"User ID: {u_id}"
+        member_list_text += f"**#{idx}** {name}\n"
+
+    embed.description = member_list_text
     await ctx.send(embed=embed)
 
 @bot.command(name="stopevent")
@@ -175,7 +221,8 @@ async def stopevent(ctx):
         return
     closed_code = active_event["secret_code"]
     active_event["secret_code"] = None
-    await ctx.send(f"🛑 Closed event code `{closed_code}`.")
+    active_event["registered_users"] = []
+    await ctx.send(f"🛑 Closed event code `{closed_code}` and cleared lists.")
 
 @bot.command(name="checkin")
 async def checkin(ctx, code: str):
@@ -185,6 +232,7 @@ async def checkin(ctx, code: str):
         return
     if time.time() > active_event["end_timestamp"]:
         active_event["secret_code"] = None
+        active_event["registered_users"] = []
         await ctx.send("🛑 This event has expired.")
         return
     if code.lower() != active_event["secret_code"]:
@@ -267,7 +315,6 @@ async def helpmenu(ctx):
         color=discord.Color.blue()
     )
     
-    # Check if the user running the command is an Administrator
     is_admin = ctx.author.guild_permissions.administrator
 
     if is_admin:
@@ -277,10 +324,11 @@ async def helpmenu(ctx):
             "**!stopevent**\n"
             "Manually terminates the current long-term event early.\n\n"
             "**!startsignup <days> <campaign_name>**\n"
-            "Creates a Discord event and initializes a signup roster.\n"
-            "*Example:* `!startsignup 7 CoX Mass Campaign`\n\n"
+            "Creates a Discord event and initializes a signup roster.\n\n"
             "**!viewroster**\n"
             "Displays the list of everyone registered for the campaign.\n\n"
+            "**!fullroster**\n"
+            "Generates a ranked list of all server members, including 0 pointers.\n\n"
             "**!attendance <target> <type> <pts>**\n"
             "Instantly awards points to an @Member, @Role, or \"VC Name\".\n\n"
             "**!award <@member> <pts> [reason]**\n"
@@ -303,7 +351,6 @@ async def helpmenu(ctx):
     )
     embed.add_field(name="👤 Member Commands", value=public_desc, inline=False)
     
-    # Dynamically lists all the OSRS scimitar tiers and their math balances
     shop_list = "\n".join([f"• **{info['name']}** — `{info['cost']} DKP`" for info in RANK_TIERS.values()])
     embed.add_field(name="⚔️ Scimitar Rank Shop Prices", value=shop_list, inline=False)
     
@@ -408,6 +455,41 @@ async def viewroster(ctx):
     embed.description = member_list_text
     embed.set_footer(text=f"Total Registrations: {len(user_ids)} clan members")
     await ctx.send(embed=embed)
+
+@bot.command(name="fullroster")
+@commands.has_permissions(administrator=True)
+async def fullroster(ctx):
+    """Generates a complete list of all server members ranked by points, including 0 pointers."""
+    dkp_data = load_dkp_from_github()
+    roster_list = []
+
+    # 1. Loop through every single human member in the server
+    for member in ctx.guild.members:
+        if not member.bot:
+            user_id = str(member.id)
+            # Fetch points, default to 0 if they aren't in the database
+            points = dkp_data.get(user_id, 0)
+            roster_list.append((member.display_name, points))
+
+    # 2. Sort the roster from highest points to lowest points
+    roster_list.sort(key=lambda x: x[1], reverse=True)
+
+    # 3. Split the list into small chunks so it doesn't break Discord text limits
+    chunk_size = 15
+    for i in range(0, len(roster_list), chunk_size):
+        chunk = roster_list[i:i+chunk_size]
+        
+        embed = discord.Embed(
+            title=f"📋 Full Server DKP Roster (Part {i//chunk_size + 1})", 
+            color=discord.Color.dark_purple()
+        )
+        
+        desc = ""
+        for rank, (name, points) in enumerate(chunk, start=i+1):
+            desc += f"**#{rank}** {name} — `{points} DKP`\n"
+            
+        embed.description = desc
+        await ctx.send(embed=embed)
 
 if __name__ == "__main__":
     if DISCORD_TOKEN and GITHUB_TOKEN and GITHUB_REPO_NAME:
