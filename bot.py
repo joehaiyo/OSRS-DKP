@@ -62,11 +62,19 @@ def save_dkp_to_github(data, log_entry=None):
         repo = g.get_repo(GITHUB_REPO_NAME)
         json_content = json.dumps(data, indent=4)
         
+        # FIX: Check if file exists first to avoid blind fallback wipes
         try:
             file = repo.get_contents(DATA_FILE)
             repo.update_file(file.path, "Update DKP database balances", json_content, file.sha)
-        except Exception:
-            repo.create_file(DATA_FILE, "Initialize DKP database", json_content)
+            logging.info(f"Successfully updated {DATA_FILE} on GitHub.")
+        except Exception as file_error:
+            # Only create a brand new file if it literally does not exist at all
+            if "404" in str(file_error) or "not found" in str(file_error).lower():
+                repo.create_file(DATA_FILE, "Initialize DKP database", json_content)
+                logging.info(f"Initialized brand new {DATA_FILE} on GitHub.")
+            else:
+                # If it's a network/timeout error, raise it so it doesn't corrupt anything
+                raise file_error
             
         if log_entry:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -76,13 +84,16 @@ def save_dkp_to_github(data, log_entry=None):
                 existing_log = log_file.decoded_content.decode("utf-8")
                 updated_log = new_log_text + existing_log
                 repo.update_file(log_file.path, "Append DKP audit log", updated_log, log_file.sha)
-            except Exception:
-                repo.create_file(LOG_FILE, "Initialize DKP audit log", new_log_text)
+            except Exception as log_error:
+                if "404" in str(log_error) or "not found" in str(log_error).lower():
+                    repo.create_file(LOG_FILE, "Initialize DKP audit log", new_log_text)
+                else:
+                    raise log_error
                 
         logging.info("Successfully synced data and logs to GitHub repository.")
     except Exception as e:
-        logging.error(f"Failed to sync data modifications with GitHub: {e}")
-
+        logging.error(f"CRITICAL: Failed to sync data modifications with GitHub: {e}")
+        
 # --- BOT SETUP ---
 intents = discord.Intents.default()
 intents.message_content = True
