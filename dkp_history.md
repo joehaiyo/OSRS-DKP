@@ -1,3 +1,5 @@
+## [2026-08-28 15:40] Event via Joehaiyo. Given 150 DKP to: Joehaiyo
+
 ## [2026-08-28 06:26] Checkin: Joehaiyo +200
 
 ## [2026-08-28 06:23] Award: Joehaiyo +10 DKP (so cool)
