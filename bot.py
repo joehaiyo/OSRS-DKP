@@ -167,7 +167,61 @@ async def leaderboard(ctx):
         desc += f"**#{idx}** {name} — `{pts} DKP`\n"
     embed.description = desc
     await ctx.send(embed=embed)
+    
+# --- GLOBAL ACTIVE EVENT TRACKER ---
+active_event = {
+    "secret_code": None,
+    "final_points": 0,
+    "event_type": None,
+    "claimed_users": set()
+}
 
+@bot.command(name="startevent")
+@commands.has_permissions(administrator=True)
+async def startevent(ctx, event_type: str, base_points: int, secret_code: str):
+    event_type = event_type.lower()
+    if event_type not in EVENT_MULTIPLIERS:
+        await ctx.send("❌ Invalid event type.")
+        return
+
+    import asyncio
+    multiplier = EVENT_MULTIPLIERS[event_type]
+    active_event["secret_code"] = secret_code.lower()
+    active_event["final_points"] = round(base_points * multiplier)
+    active_event["event_type"] = event_type
+    active_event["claimed_users"] = set()
+
+    embed = discord.Embed(title="📢 Self-Checkin Started!", color=discord.Color.orange())
+    embed.description = f"Claim your points for the next **15 minutes**!\n\n👉 Type **`!checkin {secret_code}`**"
+    embed.add_field(name="Points", value=f"**{active_event['final_points']} DKP**")
+    await ctx.send(embed=embed)
+
+    await asyncio.sleep(900)
+    if active_event["secret_code"] == secret_code.lower():
+        active_event["secret_code"] = None
+        await ctx.send("🛑 The check-in window has closed.")
+
+@bot.command(name="checkin")
+async def checkin(ctx, code: str):
+    if not active_event["secret_code"]:
+        await ctx.send("❌ No active check-in event running.")
+        return
+    if code.lower() != active_event["secret_code"]:
+        await ctx.send("❌ Incorrect code.")
+        return
+    
+    u_id = str(ctx.author.id)
+    if u_id in active_event["claimed_users"]:
+        await ctx.send("⚠️ Already checked in!")
+        return
+
+    dkp_data = load_dkp_from_github()
+    dkp_data[u_id] = dkp_data.get(u_id, 0) + active_event["final_points"]
+    active_event["claimed_users"].add(u_id)
+    
+    save_dkp_to_github(dkp_data, f"Self-Checkin: {ctx.author.display_name} +{active_event['final_points']} DKP")
+    await ctx.send(f"✅ logged! **+{active_event['final_points']} DKP**")
+    
 # --- RUN ENGINE LOOP ---
 if __name__ == "__main__":
     if DISCORD_TOKEN and GITHUB_TOKEN and GITHUB_REPO_NAME:
