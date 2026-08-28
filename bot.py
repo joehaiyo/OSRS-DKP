@@ -190,19 +190,19 @@ async def leaderboard(ctx):
         await ctx.send("The DKP database is currently empty.")
         return
         
-    # FIX: Properly sort by value (points), not keys
-    sorted_dkp = sorted(dkp_data.items(), key=lambda item: item[1], reverse=True)
+    # Safe numerical sorting check (highest to lowest score)
+    sorted_dkp = sorted(dkp_data.items(), key=lambda item: int(item[1]), reverse=True)
     
     embed = discord.Embed(title="🏆 Clan DKP Leaderboard", color=discord.Color.gold())
     description = ""
-    for index, (user_id, points) in enumerate(sorted_dkp[:10], start=1):
+    for index, (user_id, points) in enumerate(sorted_df[:10], start=1):
         member = ctx.guild.get_member(int(user_id))
         name = member.display_name if member else f"User ID {user_id}"
         description += f"**#{index}** {name} — `{points} DKP`\n"
         
     embed.description = description
     await ctx.send(embed=embed)
-
+    
 if __name__ == "__main__":
     if not DISCORD_TOKEN or not GITHUB_TOKEN or not GITHUB_REPO_NAME:
         logging.critical("Missing required environment variables. Initialization halted.")
