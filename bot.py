@@ -134,17 +134,72 @@ async def award(ctx, member: discord.Member, points: int, *, reason: str = "Sign
     save_dkp_to_github(dkp_data, f"Award: {member.display_name} +{points} DKP ({reason})")
     await ctx.send(f"🏆 **{member.display_name}** received **{points} DKP**!")
 
-@bot.command(name="spend")
-async def spend(ctx, amount: int, *, item: str):
-    if amount <= 0: return
-    dkp_data = load_dkp_from_github()
-    bal = dkp_data.get(str(ctx.author.id), 0)
-    if bal < amount:
-        await ctx.send("❌ Insufficient funds.")
+# --- OSRS SCIMITAR RANK TIERS CONFIGURATION ---
+RANK_TIERS = {
+    "bronze": {"name": "Bronze Scimitar", "cost": 150},
+    "iron": {"name": "Iron Scimitar", "cost": 400},
+    "steel": {"name": "Steel Scimitar", "cost": 800},
+    "black": {"name": "Black Scimitar", "cost": 1500},
+    "mithril": {"name": "Mithril Scimitar", "cost": 2500},
+    "adamant": {"name": "Adamant Scimitar", "cost": 4000},
+    "rune": {"name": "Rune Scimitar", "cost": 6000},
+    "dragon": {"name": "Dragon Scimitar", "cost": 10000}
+}
+
+@bot.command(name="buyrank")
+async def buyrank(ctx, *, rank_keyword: str):
+    """Allows members to buy OSRS scimitar tier roles using their accumulated DKP points."""
+    rank_keyword = rank_keyword.lower().strip()
+    
+    if rank_keyword not in RANK_TIERS:
+        valid_ranks = ", ".join([f"`{k.capitalize()}`" for k in RANK_TIERS.keys()])
+        await ctx.send(f"❌ Invalid rank! Choose from: {valid_ranks}\n*Example:* `!buyrank mithril`")
         return
-    dkp_data[str(ctx.author.id)] = bal - amount
-    save_dkp_to_github(dkp_data, f"Spent: {ctx.author.display_name} -{amount} DKP on {item}")
-    await ctx.send(f"🛍️ Purchase logged! Remaining balance: `{bal - amount} DKP`")
+
+    rank_info = RANK_TIERS[rank_keyword]
+    target_role_name = rank_info["name"]
+    cost = rank_info["cost"]
+
+    # 1. Verify the role exists inside the Discord server
+    role = discord.utils.get(ctx.guild.roles, name=target_role_name)
+    if not role:
+        await ctx.send(f"❌ Error: The server role **'{target_role_name}'** does not exist. Please ask an Admin to create it.")
+        return
+
+    # 2. Check if the user already holds this rank role
+    if role in ctx.author.roles:
+        await ctx.send(f"⚠️ You already hold the **{target_role_name}** rank!")
+        return
+
+    # 3. Load database balances and verify funding
+    dkp_data = load_dkp_from_github()
+    user_id = str(ctx.author.id)
+    current_balance = dkp_data.get(user_id, 0)
+
+    if current_balance < cost:
+        await ctx.send(f"❌ Insufficient DKP! **{target_role_name}** costs `{cost} DKP`, but you only have `{current_balance} DKP`.")
+        return
+
+    # 4. Process transaction deductions
+    dkp_data[user_id] = current_balance - cost
+    log_msg = f"Rank Purchase: {ctx.author.display_name} spent {cost} DKP to promote to {target_role_name}"
+    save_dkp_to_github(dkp_data, log_msg)
+
+    # 5. Hand out the role natively in Discord
+    try:
+        await ctx.author.add_roles(role)
+        
+        embed = discord.Embed(title="⚔️ Clan Promotion Achieved!", color=discord.Color.dark_red())
+        embed.description = f"⚔️ **{ctx.author.mention}** has advanced to a higher combat tier!"
+        embed.add_field(name="Rank Unlocked", value=f"🛡️ **{target_role_name}**", inline=True)
+        embed.add_field(name="DKP Spent", value=f"`{cost} DKP`", inline=True)
+        embed.add_field(name="New Balance", value=f"`{dkp_data[user_id]} DKP`", inline=True)
+        embed.set_thumbnail(url=ctx.author.display_avatar.url)
+        await ctx.send(embed=embed)
+    except discord.Forbidden:
+        await ctx.send(
+            "⚠️ Points deducted, but **failed to give role due to a Discord Hierarchy error!**\n"
+            "👉 Please ask an Admin to go to Server Settings -> Roles, and drag the Bot's role above the Scimitar roles."
 
 @bot.command(name="dkp")
 async def dkp(ctx, member: discord.Member = None):
