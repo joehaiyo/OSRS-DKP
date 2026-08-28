@@ -4,6 +4,8 @@ import json
 import os
 import logging
 import threading
+import asyncio
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from github import Github
 from datetime import datetime
@@ -27,7 +29,25 @@ EVENT_MULTIPLIERS = {
     "custom": 1.0
 }
 
-# --- HEALTH CHECK SERVER (For Google Cloud Run) ---
+RANK_TIERS = {
+    "bronze": {"name": "Bronze Scimitar", "cost": 150},
+    "iron": {"name": "Iron Scimitar", "cost": 400},
+    "steel": {"name": "Steel Scimitar", "cost": 800},
+    "black": {"name": "Black Scimitar", "cost": 1500},
+    "mithril": {"name": "Mithril Scimitar", "cost": 2500},
+    "adamant": {"name": "Adamant Scimitar", "cost": 4000},
+    "rune": {"name": "Rune Scimitar", "cost": 6000},
+    "dragon": {"name": "Dragon Scimitar", "cost": 10000}
+}
+
+active_event = {
+    "secret_code": None,
+    "final_points": 0,
+    "event_type": None,
+    "end_timestamp": 0,
+    "claimed_users": set()
+}
+
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -40,8 +60,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
 def run_health_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthCheckHandler)
     server.serve_forever()
-
-# --- GITHUB STORAGE HELPER CODES ---
+    
 def load_dkp_from_github():
     try:
         g = Github(GITHUB_TOKEN)
@@ -74,7 +93,6 @@ def save_dkp_to_github(data, log_entry=None):
     except Exception as e:
         logging.error(f"CRITICAL GitHub Sync Fail: {e}")
 
-# --- BOT CONTEXT START ---
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -84,8 +102,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.event
 async def on_ready():
     logging.info(f"Bot online as {bot.user.name}")
-    
-# --- COMMANDS ENGINE ---
 
 @bot.command(name="attendance")
 @commands.has_permissions(administrator=True)
@@ -100,7 +116,7 @@ async def attendance(ctx, target: Union[discord.VoiceChannel, discord.Role, disc
     dkp_data = load_dkp_from_github()
     rewarded = []
 
-    if isinstance(target, discord.VoiceChannel) or isinstance(target, discord.Role):
+    if isinstance(target, (discord.VoiceChannel, discord.Role)):
         t_name = f"{target.name}"
         for member in target.members:
             if not member.bot:
@@ -125,6 +141,93 @@ async def attendance_error(ctx, error):
         await ctx.send("❌ **Invalid Target!** Use a VC Name, @Role, or @Member.")
     else:
         await ctx.send(f"⚠️ Error: `{error}`")
+        
+@bot.command(name="startevent")
+@commands.has_permissions(administrator=True)
+async def startevent(ctx, event_type: str, base_points: int, duration_days: int, secret_code: str):
+    global active_event
+    event_type = event_type.lower()
+    if event_type not in EVENT_MULTIPLIERS:
+        await ctx.send("❌ Invalid event type.")
+        return
+
+    multiplier = EVENT_MULTIPLIERS[event_type]
+    expiration_epoch = int(time.time()) + (duration_days * 86400)
+
+    active_event["secret_code"] = secret_code.lower()
+    active_event["final_points"] = round(base_points * multiplier)
+    active_event["event_type"] = event_type
+    active_event["end_timestamp"] = expiration_epoch
+    active_event["claimed_users"] = set()
+
+    display_time = datetime.fromtimestamp(expiration_epoch).strftime('%Y-%m-%d %H:%M UTC')
+    embed = discord.Embed(title="📢 Long-Term Event Open!", color=discord.Color.orange())
+    embed.description = f"👉 Type **`!checkin {secret_code}`** to claim.\n🚨 **Deadline:** Active until `{display_time}`."
+    embed.add_field(name="Points Available", value=f"**{active_event['final_points']} DKP**")
+    await ctx.send(embed=embed)
+
+@bot.command(name="stopevent")
+@commands.has_permissions(administrator=True)
+async def stopevent(ctx):
+    global active_event
+    if not active_event["secret_code"]:
+        await ctx.send("⚠️ No active events running.")
+        return
+    closed_code = active_event["secret_code"]
+    active_event["secret_code"] = None
+    await ctx.send(f"🛑 Closed event code `{closed_code}`.")
+
+@bot.command(name="checkin")
+async def checkin(ctx, code: str):
+    global active_event
+    if not active_event["secret_code"]:
+        await ctx.send("❌ No active check-in running.")
+        return
+    if time.time() > active_event["end_timestamp"]:
+        active_event["secret_code"] = None
+        await ctx.send("🛑 This event has expired.")
+        return
+    if code.lower() != active_event["secret_code"]:
+        await ctx.send("❌ Incorrect code.")
+        return
+    u_id = str(ctx.author.id)
+    if u_id in active_event["claimed_users"]:
+        await ctx.send("⚠️ Already checked in!")
+        return
+
+    dkp_data = load_dkp_from_github()
+    dkp_data[u_id] = dkp_data.get(u_id, 0) + active_event["final_points"]
+    active_event["claimed_users"].add(u_id)
+    save_dkp_to_github(dkp_data, f"Checkin: {ctx.author.display_name} +{active_event['final_points']}")
+    await ctx.send(f"✅ Logged! **+{active_event['final_points']} DKP**")
+
+@bot.command(name="buyrank")
+async def buyrank(ctx, *, rank_keyword: str):
+    rank_keyword = rank_keyword.lower().strip()
+    if rank_keyword not in RANK_TIERS:
+        await ctx.send("❌ Invalid rank chosen.")
+        return
+    rank_info = RANK_TIERS[rank_keyword]
+    role = discord.utils.get(ctx.guild.roles, name=rank_info["name"])
+    if not role:
+        await ctx.send(f"❌ Server role '{rank_info['name']}' not found.")
+        return
+    if role in ctx.author.roles:
+        await ctx.send("⚠️ You already have this rank!")
+        return
+    dkp_data = load_dkp_from_github()
+    user_id = str(ctx.author.id)
+    bal = dkp_data.get(user_id, 0)
+    if bal < rank_info["cost"]:
+        await ctx.send(f"❌ Need `{rank_info['cost']} DKP`. You have `{bal}`.")
+        return
+    dkp_data[user_id] = bal - rank_info["cost"]
+    save_dkp_to_github(dkp_data, f"Rank Promo: {ctx.author.display_name} -> {rank_info['name']}")
+    try:
+        await ctx.author.add_roles(role)
+        await ctx.send(f"⚔️ **{ctx.author.display_name}** promoted to **{rank_info['name']}**!")
+    except discord.Forbidden:
+        await ctx.send("⚠️ Hierarchy error: Drag Bot's role above scimitar roles.")
 
 @bot.command(name="award")
 @commands.has_permissions(administrator=True)
@@ -133,73 +236,6 @@ async def award(ctx, member: discord.Member, points: int, *, reason: str = "Sign
     dkp_data[str(member.id)] = dkp_data.get(str(member.id), 0) + points
     save_dkp_to_github(dkp_data, f"Award: {member.display_name} +{points} DKP ({reason})")
     await ctx.send(f"🏆 **{member.display_name}** received **{points} DKP**!")
-
-# --- OSRS SCIMITAR RANK TIERS CONFIGURATION ---
-RANK_TIERS = {
-    "bronze": {"name": "Bronze Scimitar", "cost": 150},
-    "iron": {"name": "Iron Scimitar", "cost": 400},
-    "steel": {"name": "Steel Scimitar", "cost": 800},
-    "black": {"name": "Black Scimitar", "cost": 1500},
-    "mithril": {"name": "Mithril Scimitar", "cost": 2500},
-    "adamant": {"name": "Adamant Scimitar", "cost": 4000},
-    "rune": {"name": "Rune Scimitar", "cost": 6000},
-    "dragon": {"name": "Dragon Scimitar", "cost": 10000}
-}
-
-@bot.command(name="buyrank")
-async def buyrank(ctx, *, rank_keyword: str):
-    """Allows members to buy OSRS scimitar tier roles using their accumulated DKP points."""
-    rank_keyword = rank_keyword.lower().strip()
-    
-    if rank_keyword not in RANK_TIERS:
-        valid_ranks = ", ".join([f"`{k.capitalize()}`" for k in RANK_TIERS.keys()])
-        await ctx.send(f"❌ Invalid rank! Choose from: {valid_ranks}\n*Example:* `!buyrank mithril`")
-        return
-
-    rank_info = RANK_TIERS[rank_keyword]
-    target_role_name = rank_info["name"]
-    cost = rank_info["cost"]
-
-    # 1. Verify the role exists inside the Discord server
-    role = discord.utils.get(ctx.guild.roles, name=target_role_name)
-    if not role:
-        await ctx.send(f"❌ Error: The server role **'{target_role_name}'** does not exist. Please ask an Admin to create it.")
-        return
-
-    # 2. Check if the user already holds this rank role
-    if role in ctx.author.roles:
-        await ctx.send(f"⚠️ You already hold the **{target_role_name}** rank!")
-        return
-
-    # 3. Load database balances and verify funding
-    dkp_data = load_dkp_from_github()
-    user_id = str(ctx.author.id)
-    current_balance = dkp_data.get(user_id, 0)
-
-    if current_balance < cost:
-        await ctx.send(f"❌ Insufficient DKP! **{target_role_name}** costs `{cost} DKP`, but you only have `{current_balance} DKP`.")
-        return
-
-    # 4. Process transaction deductions
-    dkp_data[user_id] = current_balance - cost
-    log_msg = f"Rank Purchase: {ctx.author.display_name} spent {cost} DKP to promote to {target_role_name}"
-    save_dkp_to_github(dkp_data, log_msg)
-
-    # 5. Hand out the role natively in Discord
-    try:
-        await ctx.author.add_roles(role)
-        
-        embed = discord.Embed(title="⚔️ Clan Promotion Achieved!", color=discord.Color.dark_red())
-        embed.description = f"⚔️ **{ctx.author.mention}** has advanced to a higher combat tier!"
-        embed.add_field(name="Rank Unlocked", value=f"🛡️ **{target_role_name}**", inline=True)
-        embed.add_field(name="DKP Spent", value=f"`{cost} DKP`", inline=True)
-        embed.add_field(name="New Balance", value=f"`{dkp_data[user_id]} DKP`", inline=True)
-        embed.set_thumbnail(url=ctx.author.display_avatar.url)
-        await ctx.send(embed=embed)
-    except discord.Forbidden:
-        await ctx.send(
-            "⚠️ Points deducted, but **failed to give role due to a Discord Hierarchy error!**\n"
-            "👉 Please ask an Admin to go to Server Settings -> Roles, and drag the Bot's role above the Scimitar roles."
 
 @bot.command(name="dkp")
 async def dkp(ctx, member: discord.Member = None):
@@ -222,159 +258,17 @@ async def leaderboard(ctx):
         desc += f"**#{idx}** {name} — `{pts} DKP`\n"
     embed.description = desc
     await ctx.send(embed=embed)
-    
-# --- GLOBAL ACTIVE EVENT TRACKER ---
-active_event = {
-    "secret_code": None,
-    "final_points": 0,
-    "event_type": None,
-    "claimed_users": set()
-}
 
-# --- GLOBAL ACTIVE EVENT TRACKER ---
-# The active event state will now safely fall back to checking deadlines.
-active_event = {
-    "secret_code": None,
-    "final_points": 0,
-    "event_type": None,
-    "end_timestamp": 0, # Stored as a raw epoch integer
-    "claimed_users": set()
-}
-
-@bot.command(name="startevent")
-@commands.has_permissions(administrator=True)
-async def startevent(ctx, event_type: str, base_points: int, duration_days: int, secret_code: str):
-    """Starts an attendance window that persists safely across server restarts."""
-    global active_event
-    event_type = event_type.lower()
-    
-    if event_type not in EVENT_MULTIPLIERS:
-        await ctx.send("❌ Invalid event type.")
-        return
-
-    import time
-    multiplier = EVENT_MULTIPLIERS[event_type]
-    
-    # Calculate exact future expiration timestamp (Days -> Seconds)
-    expiration_epoch = int(time.time()) + (duration_days * 86400)
-
-    active_event["secret_code"] = secret_code.lower()
-    active_event["final_points"] = round(base_points * multiplier)
-    active_event["event_type"] = event_type
-    active_event["end_timestamp"] = expiration_epoch
-    active_event["claimed_users"] = set()
-
-    # Create a human-readable format for the server confirmation
-    display_time = datetime.fromtimestamp(expiration_epoch).strftime('%Y-%m-%d %H:%M UTC')
-
-    embed = discord.Embed(title="📢 Long-Term Event Open!", color=discord.Color.orange())
-    embed.description = (
-        f"A multi-day check-in window has been established!\n\n"
-        f"👉 Type **`!checkin {secret_code}`** to claim your reward.\n"
-        f"🚨 **Deadline:** This code will remain active until `{display_time}`."
-    )
-    embed.add_field(name="Points Available", value=f"**{active_event['final_points']} DKP**")
-    await ctx.send(embed=embed)
-
-
-@bot.command(name="checkin")
-async def checkin(ctx, code: str):
-    """Processes a user check-in while verifying against the persistent epoch clock."""
-    global active_event
-    import time
-
-    # 1. Enforce active check
-    if not active_event["secret_code"]:
-        await ctx.send("❌ There is no active check-in running right now.")
-        return
-
-    # 2. Check if the long-term date has expired
-    if int(time.time()) > active_event["end_timestamp"]:
-        expired_code = active_event["secret_code"]
-        active_event["secret_code"] = None # Close the event natively
-        await ctx.send(f"🛑 **Event Concluded!** The check-in window for `{expired_code}` closed automatically.")
-        return
-
-    # 3. Validate code accuracy
-    if code.lower() != active_event["secret_code"]:
-        await ctx.send("❌ Incorrect event secret code. Try again.")
-        return
-    
-    u_id = str(ctx.author.id)
-    if u_id in active_event["claimed_users"]:
-        await ctx.send("⚠️ You have already logged your attendance for this specific code!")
-        return
-
-    # 4. Award points safely
-    dkp_data = load_dkp_from_github()
-    dkp_data[u_id] = dkp_data.get(u_id, 0) + active_event["final_points"]
-    active_event["claimed_users"].add(u_id)
-    
-    save_dkp_to_github(dkp_data, f"Self-Checkin: {ctx.author.display_name} +{active_event['final_points']} DKP")
-    await ctx.send(f"✅ **{ctx.author.display_name}**, your attendance has been logged! **+{active_event['final_points']} DKP**")
-
-
-@bot.command(name="stopevent")
-@commands.has_permissions(administrator=True)
-async def stopevent(ctx):
-    """Allows an administrator to manually kill the active timer early."""
-    global active_event
-    if not active_event["secret_code"]:
-        await ctx.send("⚠️ There are no active events running to stop.")
-        return
-    
-    closed_code = active_event["secret_code"]
-    active_event["secret_code"] = None
-    await ctx.send(f"🛑 Manual Override: Event code `{closed_code}` has been terminated by an administrator.")
-    
 @bot.command(name="helpmenu")
 async def helpmenu(ctx):
-    """Displays a filtered, up-to-date guide for all active DKP system commands."""
-    embed = discord.Embed(
-        title="⚔️ Old School RuneScape Clan DKP Bot Guide", 
-        color=discord.Color.blue()
-    )
-    
-    # Check if the user running the command is an Administrator
-    is_admin = ctx.author.guild_permissions.administrator
-
-    if is_admin:
-        admin_desc = (
-            "**!startevent <type> <pts> <days> <code>**\n"
-            "Opens a multi-day event window for self check-ins.\n"
-            "*Example:* `!startevent bossing 40 7 cox_week`\n\n"
-            "**!stopevent**\n"
-            "Manually terminates the current long-term event early.\n\n"
-            "**!attendance <target> <type> <pts>**\n"
-            "Instantly awards points to an @Member, @Role, or \"VC Name\".\n"
-            "*Example:* `!attendance @Raiders bossing 40`\n\n"
-            "**!award <@member> <pts> [reason]**\n"
-            "Manually adds points to one specific player."
-        )
-        embed.add_field(name="🛡️ Admin Commands", value=admin_desc, inline=False)
-
-    public_desc = (
-        "**!checkin <code>**\n"
-        "Claim your own event points using an active secret code.\n"
-        "*Example:* `!checkin cox_week`\n\n"
-        "**!buyrank <tier>**\n"
-        "Spend DKP to unlock an OSRS Clan Rank role.\n"
-        "*Example:* `!buyrank mithril`\n\n"
-        "**!dkp [@member]**\n"
-        "Checks your point balance (or a tagged user's).\n\n"
-        "**!leaderboard**\n"
-        "Displays the top 10 highest-ranked clan members."
-    )
-    embed.add_field(name="👤 Member Commands", value=public_desc, inline=False)
-    
-    # Dynamically lists all the OSRS scimitar tiers and their math balances
-    shop_list = "\n".join([f"• **{info['name']}** — `{info['cost']} DKP`" for info in RANK_TIERS.values()])
-    embed.add_field(name="⚔️ Scimitar Rank Shop Prices", value=shop_list, inline=False)
-    
-    embed.set_footer(text="Valid event types: skilling, bossing, bingo, custom")
+    embed = discord.Embed(title="⚔️ Clan Bot Guide", color=discord.Color.blue())
+    if ctx.author.guild_permissions.administrator:
+        embed.add_field(name="🛡️ Admin", value="`!startevent <type> <pts> <days> <code>`\n`!stopevent`\n`!attendance <target> <type> <pts>`\n`!award <@member> <pts>`", inline=False)
+    embed.add_field(name="👤 Member", value="`!checkin <code>`\n`!buyrank <tier>`\n`!dkp [@member]`\n`!leaderboard`", inline=False)
+    shop_list = "\n".join([f"• {info['name']}: `{info['cost']} DKP`" for info in RANK_TIERS.values()])
+    embed.add_field(name="⚔️ Rank Shop", value=shop_list, inline=False)
     await ctx.send(embed=embed)
 
-# --- RUN ENGINE LOOP ---
 if __name__ == "__main__":
     if DISCORD_TOKEN and GITHUB_TOKEN and GITHUB_REPO_NAME:
         t = threading.Thread(target=run_health_server, daemon=True)
