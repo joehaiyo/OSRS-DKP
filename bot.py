@@ -231,54 +231,101 @@ active_event = {
     "claimed_users": set()
 }
 
+# --- GLOBAL ACTIVE EVENT TRACKER ---
+# The active event state will now safely fall back to checking deadlines.
+active_event = {
+    "secret_code": None,
+    "final_points": 0,
+    "event_type": None,
+    "end_timestamp": 0, # Stored as a raw epoch integer
+    "claimed_users": set()
+}
+
 @bot.command(name="startevent")
 @commands.has_permissions(administrator=True)
-async def startevent(ctx, event_type: str, base_points: int, secret_code: str):
-
+async def startevent(ctx, event_type: str, base_points: int, duration_days: int, secret_code: str):
+    """Starts an attendance window that persists safely across server restarts."""
     global active_event
-    
     event_type = event_type.lower()
+    
     if event_type not in EVENT_MULTIPLIERS:
         await ctx.send("❌ Invalid event type.")
         return
 
-    import asyncio
+    import time
     multiplier = EVENT_MULTIPLIERS[event_type]
+    
+    # Calculate exact future expiration timestamp (Days -> Seconds)
+    expiration_epoch = int(time.time()) + (duration_days * 86400)
+
     active_event["secret_code"] = secret_code.lower()
     active_event["final_points"] = round(base_points * multiplier)
     active_event["event_type"] = event_type
+    active_event["end_timestamp"] = expiration_epoch
     active_event["claimed_users"] = set()
 
-    embed = discord.Embed(title="📢 Self-Checkin Started!", color=discord.Color.orange())
-    embed.description = f"Claim your points for the next **15 minutes**!\n\n👉 Type **`!checkin {secret_code}`**"
-    embed.add_field(name="Points", value=f"**{active_event['final_points']} DKP**")
+    # Create a human-readable format for the server confirmation
+    display_time = datetime.fromtimestamp(expiration_epoch).strftime('%Y-%m-%d %H:%M UTC')
+
+    embed = discord.Embed(title="📢 Long-Term Event Open!", color=discord.Color.orange())
+    embed.description = (
+        f"A multi-day check-in window has been established!\n\n"
+        f"👉 Type **`!checkin {secret_code}`** to claim your reward.\n"
+        f"🚨 **Deadline:** This code will remain active until `{display_time}`."
+    )
+    embed.add_field(name="Points Available", value=f"**{active_event['final_points']} DKP**")
     await ctx.send(embed=embed)
 
-    await asyncio.sleep(900)
-    if active_event["secret_code"] == secret_code.lower():
-        active_event["secret_code"] = None
-        await ctx.send("🛑 The check-in window has closed.")
 
 @bot.command(name="checkin")
 async def checkin(ctx, code: str):
+    """Processes a user check-in while verifying against the persistent epoch clock."""
+    global active_event
+    import time
+
+    # 1. Enforce active check
     if not active_event["secret_code"]:
-        await ctx.send("❌ No active check-in event running.")
+        await ctx.send("❌ There is no active check-in running right now.")
         return
+
+    # 2. Check if the long-term date has expired
+    if int(time.time()) > active_event["end_timestamp"]:
+        expired_code = active_event["secret_code"]
+        active_event["secret_code"] = None # Close the event natively
+        await ctx.send(f"🛑 **Event Concluded!** The check-in window for `{expired_code}` closed automatically.")
+        return
+
+    # 3. Validate code accuracy
     if code.lower() != active_event["secret_code"]:
-        await ctx.send("❌ Incorrect code.")
+        await ctx.send("❌ Incorrect event secret code. Try again.")
         return
     
     u_id = str(ctx.author.id)
     if u_id in active_event["claimed_users"]:
-        await ctx.send("⚠️ Already checked in!")
+        await ctx.send("⚠️ You have already logged your attendance for this specific code!")
         return
 
+    # 4. Award points safely
     dkp_data = load_dkp_from_github()
     dkp_data[u_id] = dkp_data.get(u_id, 0) + active_event["final_points"]
     active_event["claimed_users"].add(u_id)
     
     save_dkp_to_github(dkp_data, f"Self-Checkin: {ctx.author.display_name} +{active_event['final_points']} DKP")
-    await ctx.send(f"✅ logged! **+{active_event['final_points']} DKP**")
+    await ctx.send(f"✅ **{ctx.author.display_name}**, your attendance has been logged! **+{active_event['final_points']} DKP**")
+
+
+@bot.command(name="stopevent")
+@commands.has_permissions(administrator=True)
+async def stopevent(ctx):
+    """Allows an administrator to manually kill the active timer early."""
+    global active_event
+    if not active_event["secret_code"]:
+        await ctx.send("⚠️ There are no active events running to stop.")
+        return
+    
+    closed_code = active_event["secret_code"]
+    active_event["secret_code"] = None
+    await ctx.send(f"🛑 Manual Override: Event code `{closed_code}` has been terminated by an administrator.")
     
 @bot.command(name="helpmenu")
 async def helpmenu(ctx):
