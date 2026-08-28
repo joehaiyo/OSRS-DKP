@@ -225,6 +225,46 @@ async def checkin(ctx, code: str):
     save_dkp_to_github(dkp_data, f"Self-Checkin: {ctx.author.display_name} +{active_event['final_points']} DKP")
     await ctx.send(f"✅ logged! **+{active_event['final_points']} DKP**")
     
+@bot.command(name="helpmenu")
+async def helpmenu(ctx):
+    embed = discord.Embed(
+        title="🤖 Clan DKP Bot Command Guide", 
+        color=discord.Color.blue()
+    )
+    
+    # Check if the user running the command is an Admin
+    is_admin = ctx.author.guild_permissions.administrator
+
+    if is_admin:
+        admin_desc = (
+            "**!startevent <type> <pts> <code>**\n"
+            "Opens a 15-minute code check-in window.\n"
+            "*Example:* `!startevent bossing 50 raid123`\n\n"
+            "**!attendance <target> <type> <pts>**\n"
+            "Instantly awards points to a target.\n"
+            "*Targets:* @Member, @Role, or \"VC Name\"\n"
+            "*Example:* `!attendance @Raiders bossing 40`\n\n"
+            "**!award <@member> <pts> [reason]**\n"
+            "Manually adds points to one specific player."
+        )
+        embed.add_field(name="🛡️ Admin Commands", value=admin_desc, inline=False)
+
+    public_desc = (
+        "**!checkin <code>**\n"
+        "Claim your own points during an active event.\n"
+        "*Example:* `!checkin raid123`\n\n"
+        "**!spend <amount> <item>**\n"
+        "Deducts points from your balance to buy a reward.\n\n"
+        "**!dkp [@member]**\n"
+        "Checks your point balance (or a tagged user's).\n\n"
+        "**!leaderboard**\n"
+        "Displays the top 10 highest-ranked clan members."
+    )
+    embed.add_field(name="👤 Member Commands", value=public_desc, inline=False)
+    
+    embed.set_footer(text="Valid event types: skilling, bossing, bingo, custom")
+    await ctx.send(embed=embed)
+
 # --- RUN ENGINE LOOP ---
 if __name__ == "__main__":
     if DISCORD_TOKEN and GITHUB_TOKEN and GITHUB_REPO_NAME:
