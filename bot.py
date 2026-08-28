@@ -215,14 +215,23 @@ async def vieweventmembers(ctx):
 @bot.command(name="stopevent")
 @commands.has_permissions(administrator=True)
 async def stopevent(ctx):
-    global active_event
-    if not active_event["secret_code"]:
-        await ctx.send("⚠️ No active events running.")
+    global active_event, event_registrations
+
+    if active_event["secret_code"]:
+        closed_code = active_event["secret_code"]
+        active_event["secret_code"] = None
+        active_event["registered_users"] = []
+        await ctx.send(f"🛑 Closed event code {closed_code}.")
         return
-    closed_code = active_event["secret_code"]
-    active_event["secret_code"] = None
-    active_event["registered_users"] = []
-    await ctx.send(f"🛑 Closed event code `{closed_code}` and cleared lists.")
+
+    if event_registrations["active_campaign_name"]:
+        campaign = event_registrations["active_campaign_name"]
+        event_registrations["active_campaign_name"] = None
+        event_registrations["signed_up_user_ids"] = []
+        await ctx.send(f"🛑 Closed signup campaign '{campaign}'.")
+        return
+
+    await ctx.send("⚠️ No active event or signup campaign running.")
 
 @bot.command(name="checkin")
 async def checkin(ctx, code: str):
