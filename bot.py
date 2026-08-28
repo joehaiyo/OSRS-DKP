@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO_NAME = os.getenv("GITHUB_REPO")
-PORT = int(os.getenv("PORT", 8080)) # Google Cloud Run dictates this port dynamically
+PORT = int(os.getenv("PORT", 8080))
 DATA_FILE = "dkp_data.json"
 LOG_FILE = "dkp_history.md"
 
@@ -27,25 +27,21 @@ EVENT_MULTIPLIERS = {
     "custom": 1.0
 }
 
-# --- HEALTH CHECK WEB SERVER (Required by Google Cloud Run) ---
+# --- HEALTH CHECK SERVER (For Google Cloud Run) ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        """Responds to Google Cloud's alive pings to keep the container awake."""
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Bot is alive and processing events.")
-
+        self.wfile.write(b"Bot is alive.")
     def log_message(self, format, *args):
-        # Prevents flooding logs with health checks
         return
 
 def run_health_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthCheckHandler)
-    logging.info(f"Health check server listening globally on port {PORT}")
     server.serve_forever()
 
-# --- GITHUB HELPER FUNCTIONS ---
+# --- GITHUB STORAGE HELPER CODES ---
 def load_dkp_from_github():
     try:
         g = Github(GITHUB_TOKEN)
@@ -53,7 +49,7 @@ def load_dkp_from_github():
         file_content = repo.get_contents(DATA_FILE)
         return json.loads(file_content.decoded_content.decode("utf-8"))
     except Exception as e:
-        logging.warning(f"Starting fresh DKP database. Info: {e}")
+        logging.warning(f"Starting fresh database: {e}")
         return {}
 
 def save_dkp_to_github(data, log_entry=None):
@@ -61,202 +57,120 @@ def save_dkp_to_github(data, log_entry=None):
         g = Github(GITHUB_TOKEN)
         repo = g.get_repo(GITHUB_REPO_NAME)
         json_content = json.dumps(data, indent=4)
-        
-        # FIX: Check if file exists first to avoid blind fallback wipes
         try:
             file = repo.get_contents(DATA_FILE)
-            repo.update_file(file.path, "Update DKP database balances", json_content, file.sha)
-            logging.info(f"Successfully updated {DATA_FILE} on GitHub.")
-        except Exception as file_error:
-            # Only create a brand new file if it literally does not exist at all
-            if "404" in str(file_error) or "not found" in str(file_error).lower():
-                repo.create_file(DATA_FILE, "Initialize DKP database", json_content)
-                logging.info(f"Initialized brand new {DATA_FILE} on GitHub.")
-            else:
-                # If it's a network/timeout error, raise it so it doesn't corrupt anything
-                raise file_error
-            
+            repo.update_file(file.path, "Update balances", json_content, file.sha)
+        except Exception:
+            repo.create_file(DATA_FILE, "Init database", json_content)
         if log_entry:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-            new_log_text = f"## [{timestamp}] {log_entry}\n\n"
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+            new_log = f"## [{ts}] {log_entry}\n\n"
             try:
-                log_file = repo.get_contents(LOG_FILE)
-                existing_log = log_file.decoded_content.decode("utf-8")
-                updated_log = new_log_text + existing_log
-                repo.update_file(log_file.path, "Append DKP audit log", updated_log, log_file.sha)
-            except Exception as log_error:
-                if "404" in str(log_error) or "not found" in str(log_error).lower():
-                    repo.create_file(LOG_FILE, "Initialize DKP audit log", new_log_text)
-                else:
-                    raise log_error
-                
-        logging.info("Successfully synced data and logs to GitHub repository.")
+                l_file = repo.get_contents(LOG_FILE)
+                updated_log = new_log + l_file.decoded_content.decode("utf-8")
+                repo.update_file(l_file.path, "Append audit log", updated_log, l_file.sha)
+            except Exception:
+                repo.create_file(LOG_FILE, "Init audit log", new_log)
     except Exception as e:
-        logging.error(f"CRITICAL: Failed to sync data modifications with GitHub: {e}")
-        
-# --- BOT SETUP ---
+        logging.error(f"CRITICAL GitHub Sync Fail: {e}")
+
+# --- BOT CONTEXT START ---
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.voice_states = True
-
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    logging.info(f"Bot connected to Discord gateway successfully as {bot.user.name}")
-
-# --- COMMANDS ---
-from discord.ext import commands
-from typing import Union
-import discord
+    logging.info(f"Bot online as {bot.user.name}")
+    
+# --- COMMANDS ENGINE ---
 
 @bot.command(name="attendance")
 @commands.has_permissions(administrator=True)
-async def attendance(ctx, target: Union[discord.VoiceChannel, discord.Role], event_type: str, base_points: int):
+async def attendance(ctx, target: Union[discord.VoiceChannel, discord.Role, discord.Member], event_type: str, base_points: int):
     event_type = event_type.lower()
     if event_type not in EVENT_MULTIPLIERS:
-        valid_types = ", ".join(EVENT_MULTIPLIERS.keys())
-        await ctx.send(f"❌ Invalid event type. Choose from: `{valid_types}`")
+        await ctx.send("❌ Invalid event type.")
         return
-    
-    # Rest of your existing attendance logic here...
-
-
-# --- ERROR HANDLER FOR ATTENDANCE ---
-@attendance.error
-async def attendance_error(ctx, error):
-    # Handle case where Discord cannot convert the "target" argument
-    if isinstance(error, commands.BadUnionArgument):
-        await ctx.send(
-            "❌ **Invalid Target!** Could not find a Voice Channel or Role matching your input.\n"
-            "**Usage:** `!attendance <Voice Channel or Role> <event_type> <points>`\n"
-            "**Examples:**\n"
-            "• `!attendance \"General Voice\" bossing 10` *(Use quotes for channels with spaces)*\n"
-            "• `!attendance @Raiders bossing 10` *(Mentioning a Role)*"
-        )
-    
-    # Handle case where user misses one of the required arguments
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(
-            f"❌ **Missing Argument:** `{error.param.name}` is required!\n"
-            "**Usage:** `!attendance <Voice Channel or Role> <event_type> <points>`"
-        )
-        
-    # Handle permission errors
-    elif isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You do not have the required permissions (Administrator) to run this command.")
-        
-    # Catch-all for any other command errors
-    else:
-        await ctx.send(f"⚠️ An unexpected error occurred: `{error}`")
-
 
     multiplier = EVENT_MULTIPLIERS[event_type]
     final_points = round(base_points * multiplier)
     dkp_data = load_dkp_from_github()
     rewarded = []
 
-    # Case 1: Target is a Voice Channel
-    if isinstance(target, discord.VoiceChannel):
-        target_name = f"🎙️ VC: {target.name}"
+    if isinstance(target, discord.VoiceChannel) or isinstance(target, discord.Role):
+        t_name = f"{target.name}"
         for member in target.members:
             if not member.bot:
-                user_id = str(member.id)
-                dkp_data[user_id] = dkp_data.get(user_id, 0) + final_points
+                dkp_data[str(member.id)] = dkp_data.get(str(member.id), 0) + final_points
                 rewarded.append(member.display_name)
-                
-    # Case 2: Target is a Role
-    elif isinstance(target, discord.Role):
-        target_name = f"🏷️ Role: {target.name}"
-        for member in target.members:
-            if not member.bot:
-                user_id = str(member.id)
-                dkp_data[user_id] = dkp_data.get(user_id, 0) + final_points
-                rewarded.append(member.display_name)
+    elif isinstance(target, discord.Member):
+        t_name = f"{target.display_name}"
+        if not target.bot:
+            dkp_data[str(target.id)] = dkp_data.get(str(target.id), 0) + final_points
+            rewarded.append(target.display_name)
 
     if rewarded:
-        log_msg = f"Attendance: {event_type.upper()} event (x{multiplier}) via {target_name}. Awarded {final_points} DKP to: {', '.join(rewarded)}"
+        log_msg = f"Event via {t_name}. Given {final_points} DKP to: {', '.join(rewarded)}"
         save_dkp_to_github(dkp_data, log_msg)
-        
-        embed = discord.Embed(title="✅ Attendance Logged Successfully", color=discord.Color.green())
-        embed.add_field(name="Target Source", value=target_name, inline=True)
-        embed.add_field(name="Event Type", value=f"{event_type.capitalize()} (x{multiplier})", inline=True)
-        embed.add_field(name="Points Given", value=f"**{final_points} DKP**", inline=True)
-        embed.add_field(name="Attendees Rewarded", value=f"{len(rewarded)} clan members", inline=False)
-        await ctx.send(embed=embed)
+        await ctx.send(f"✅ Points added to **{len(rewarded)}** members matching target **{t_name}**!")
     else:
-        await ctx.send(f"⚠️ No human users found matching {target_name}.")
+        await ctx.send("⚠️ No valid members found to reward.")
+
+@attendance.error
+async def attendance_error(ctx, error):
+    if isinstance(error, commands.BadUnionArgument):
+        await ctx.send("❌ **Invalid Target!** Use a VC Name, @Role, or @Member.")
+    else:
+        await ctx.send(f"⚠️ Error: `{error}`")
 
 @bot.command(name="award")
 @commands.has_permissions(administrator=True)
 async def award(ctx, member: discord.Member, points: int, *, reason: str = "Significant Event"):
     dkp_data = load_dkp_from_github()
-    user_id = str(member.id)
-    dkp_data[user_id] = dkp_data.get(user_id, 0) + points
-    log_msg = f"Manual Award: {member.display_name} received {points} DKP for '{reason}'"
-    save_dkp_to_github(dkp_data, log_msg)
-    await ctx.send(f"🏆 **{member.display_name}** received **{points} DKP** for **{reason}**!")
+    dkp_data[str(member.id)] = dkp_data.get(str(member.id), 0) + points
+    save_dkp_to_github(dkp_data, f"Award: {member.display_name} +{points} DKP ({reason})")
+    await ctx.send(f"🏆 **{member.display_name}** received **{points} DKP**!")
 
 @bot.command(name="spend")
 async def spend(ctx, amount: int, *, item: str):
-    if amount <= 0:
-        await ctx.send("❌ You must spend an amount greater than 0.")
-        return
-        
+    if amount <= 0: return
     dkp_data = load_dkp_from_github()
-    user_id = str(ctx.author.id)
-    current_balance = dkp_data.get(user_id, 0)
-    
-    if current_balance < amount:
-        await ctx.send(f"❌ Insufficient funds. You need `{amount} DKP` but only have `{current_balance} DKP`.")
+    bal = dkp_data.get(str(ctx.author.id), 0)
+    if bal < amount:
+        await ctx.send("❌ Insufficient funds.")
         return
-        
-    dkp_data[user_id] = current_balance - amount
-    log_msg = f"Purchase: {ctx.author.display_name} spent {amount} DKP on '{item}'"
-    save_dkp_to_github(dkp_data, log_msg)
-    
-    embed = discord.Embed(title="🛍️ DKP Purchase Request", color=discord.Color.blue())
-    embed.description = f"**{ctx.author.mention}** has successfully redeemed points!"
-    embed.add_field(name="Item Purchased", value=item, inline=True)
-    embed.add_field(name="Cost", value=f"`{amount} DKP`", inline=True)
-    embed.add_field(name="Remaining Balance", value=f"`{dkp_data[user_id]} DKP`", inline=True)
-    await ctx.send(embed=embed)
+    dkp_data[str(ctx.author.id)] = bal - amount
+    save_dkp_to_github(dkp_data, f"Spent: {ctx.author.display_name} -{amount} DKP on {item}")
+    await ctx.send(f"🛍️ Purchase logged! Remaining balance: `{bal - amount} DKP`")
 
 @bot.command(name="dkp")
 async def dkp(ctx, member: discord.Member = None):
-    target = member or ctx.author
+    t = member or ctx.author
     dkp_data = load_dkp_from_github()
-    balance = dkp_data.get(str(target.id), 0)
-    await ctx.send(f"📊 **{target.display_name}** currently has **{balance} DKP**.")
+    await ctx.send(f"📊 **{t.display_name}** has **{dkp_data.get(str(t.id), 0)} DKP**.")
 
 @bot.command(name="leaderboard")
 async def leaderboard(ctx):
     dkp_data = load_dkp_from_github()
     if not dkp_data:
-        await ctx.send("The DKP database is currently empty.")
+        await ctx.send("Database is empty.")
         return
-        
-    # Safe numerical sorting check (highest to lowest score)
     sorted_dkp = sorted(dkp_data.items(), key=lambda item: int(item[1]), reverse=True)
-    
-    embed = discord.Embed(title="🏆 Clan DKP Leaderboard", color=discord.Color.gold())
-    description = ""
-    for index, (user_id, points) in enumerate(sorted_df[:10], start=1):
-        member = ctx.guild.get_member(int(user_id))
-        name = member.display_name if member else f"User ID {user_id}"
-        description += f"**#{index}** {name} — `{points} DKP`\n"
-        
-    embed.description = description
+    embed = discord.Embed(title="🏆 Leaderboard", color=discord.Color.gold())
+    desc = ""
+    for idx, (u_id, pts) in enumerate(sorted_dkp[:10], start=1):
+        m = ctx.guild.get_member(int(u_id))
+        name = m.display_name if m else f"ID {u_id}"
+        desc += f"**#{idx}** {name} — `{pts} DKP`\n"
+    embed.description = desc
     await ctx.send(embed=embed)
-    
+
+# --- RUN ENGINE LOOP ---
 if __name__ == "__main__":
-    if not DISCORD_TOKEN or not GITHUB_TOKEN or not GITHUB_REPO_NAME:
-        logging.critical("Missing required environment variables. Initialization halted.")
-    else:
-        # Start the internal Web Server thread for Google Cloud health pings
-        server_thread = threading.Thread(target=run_health_server, daemon=True)
-        server_thread.start()
-        
-        # Launch the main Discord client event loop
+    if DISCORD_TOKEN and GITHUB_TOKEN and GITHUB_REPO_NAME:
+        t = threading.Thread(target=run_health_server, daemon=True)
+        t.start()
         bot.run(DISCORD_TOKEN)
