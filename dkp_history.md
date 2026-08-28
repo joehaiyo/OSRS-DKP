@@ -1,3 +1,5 @@
+## [2026-08-28 20:15] Roster Signup: Punch joined campaign 'work?'
+
 ## [2026-08-28 19:36] Event via Team 2. Given 200 DKP to: Joehaiyo, weeka, Punch
 
 ## [2026-08-28 19:25] Roster Signup: Punch joined campaign 'wildly bosses'
