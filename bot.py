@@ -320,7 +320,9 @@ async def helpmenu(ctx):
     if is_admin:
         admin_desc = (
             "**!startevent <type> <pts> <days> <code>**\n"
-            "Opens a multi-day event window for self check-ins.\n\n"
+            "Opens a multi-day event window for signups and check-ins.\n\n"
+            "**!vieweventmembers**\n"
+            "Lists all members who signed up for the active event.\n\n"
             "**!stopevent**\n"
             "Manually terminates the current long-term event early.\n\n"
             "**!startsignup <days> <campaign_name>**\n"
@@ -337,10 +339,12 @@ async def helpmenu(ctx):
         embed.add_field(name="🛡️ Admin Commands", value=admin_desc, inline=False)
 
     public_desc = (
-        "**!signdkp**\n"
-        "Signs you up for the active clan campaign roster.\n\n"
+        "**!registerevent**\n"
+        "Signs you up for the currently active long-term event roster.\n\n"
         "**!checkin <code>**\n"
         "Claim your own event points using an active secret code.\n\n"
+        "**!signdkp**\n"
+        "Signs you up for the active clan campaign roster.\n\n"
         "**!buyrank <tier>**\n"
         "Spend DKP to unlock an OSRS Clan Rank role.\n"
         "*Example:* `!buyrank rune`\n\n"
