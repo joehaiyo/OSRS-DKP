@@ -3,26 +3,47 @@ from discord.ext import commands
 import json
 import os
 import logging
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from github import Github
 from datetime import datetime
 
-# --- LOGGING SETUP (Standard for Google Cloud Logging) ---
+# --- LOGGING SETUP ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # --- CONFIGURATION FROM ENVIRONMENT ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO_NAME = os.getenv("GITHUB_REPO")
+PORT = int(os.getenv("PORT", 8080))  # Google Cloud Run dictates this port dynamically
+
 DATA_FILE = "dkp_data.json"
 LOG_FILE = "dkp_history.md"
 
-# --- EVENT MULTIPLIERS ---
 EVENT_MULTIPLIERS = {
     "skilling": 1.0,
     "bossing": 1.5,
     "bingo": 2.0,
     "custom": 1.0
 }
+
+# --- HEALTH CHECK WEB SERVER (Required by Google Cloud Run) ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        """Responds to Google Cloud's alive pings to keep the container awake."""
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is alive and processing events.")
+
+    def log_message(self, format, *args):
+        # Prevents flooding logs with health checks
+        return
+
+def run_health_server():
+    server = HTTPServer(("0.0.0.0", PORT), HealthCheckHandler)
+    logging.info(f"Health check server listening globally on port {PORT}")
+    server.serve_forever()
 
 # --- GITHUB HELPER FUNCTIONS ---
 def load_dkp_from_github():
@@ -40,7 +61,6 @@ def save_dkp_to_github(data, log_entry=None):
         g = Github(GITHUB_TOKEN)
         repo = g.get_repo(GITHUB_REPO_NAME)
         
-        # Update JSON State
         json_content = json.dumps(data, indent=4)
         try:
             file = repo.get_contents(DATA_FILE)
@@ -48,7 +68,6 @@ def save_dkp_to_github(data, log_entry=None):
         except Exception:
             repo.create_file(DATA_FILE, "Initialize DKP database", json_content)
             
-        # Append to Audit Log
         if log_entry:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
             new_log_text = f"## [{timestamp}] {log_entry}\n\n"
@@ -74,10 +93,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    logging.info(f"Bot connected to Discord gateway as {bot.user.name}")
+    logging.info(f"Bot connected to Discord gateway successfully as {bot.user.name}")
 
 # --- COMMANDS ---
-
 @bot.command(name="attendance")
 @commands.has_permissions(administrator=True)
 async def attendance(ctx, channel_id: int, event_type: str, base_points: int):
@@ -167,7 +185,7 @@ async def leaderboard(ctx):
         await ctx.send("The DKP database is currently empty.")
         return
 
-    sorted_dkp = sorted(dkp_data.items(), key=lambda item: item[1], reverse=True)
+    sorted_dkp = sorted(dkp_data.items(), key=lambda item: item, reverse=True)
     embed = discord.Embed(title="🏆 Clan DKP Leaderboard", color=discord.Color.gold())
     description = ""
     
@@ -181,6 +199,11 @@ async def leaderboard(ctx):
 
 if __name__ == "__main__":
     if not DISCORD_TOKEN or not GITHUB_TOKEN or not GITHUB_REPO_NAME:
-        logging.critical("Missing required environment variables. Cloud initialization aborted.")
+        logging.critical("Missing required environment variables. Initialization halted.")
     else:
+        # Start the internal Web Server thread for Google Cloud health pings
+        server_thread = threading.Thread(target=run_health_server, daemon=True)
+        server_thread.start()
+        
+        # Launch the main Discord client event loop
         bot.run(DISCORD_TOKEN)
