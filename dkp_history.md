@@ -1,3 +1,5 @@
+## [2026-08-28 18:55] Checkin: Joehaiyo +50
+
 ## [2026-08-28 18:54] Checkin: Punch +50
 
 ## [2026-08-28 18:51] Event via Punch. Given 50 DKP to: Punch
