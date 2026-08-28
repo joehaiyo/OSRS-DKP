@@ -261,12 +261,152 @@ async def leaderboard(ctx):
 
 @bot.command(name="helpmenu")
 async def helpmenu(ctx):
-    embed = discord.Embed(title="⚔️ Clan Bot Guide", color=discord.Color.blue())
-    if ctx.author.guild_permissions.administrator:
-        embed.add_field(name="🛡️ Admin", value="`!startevent <type> <pts> <days> <code>`\n`!stopevent`\n`!attendance <target> <type> <pts>`\n`!award <@member> <pts>`", inline=False)
-    embed.add_field(name="👤 Member", value="`!checkin <code>`\n`!buyrank <tier>`\n`!dkp [@member]`\n`!leaderboard`", inline=False)
-    shop_list = "\n".join([f"• {info['name']}: `{info['cost']} DKP`" for info in RANK_TIERS.values()])
-    embed.add_field(name="⚔️ Rank Shop", value=shop_list, inline=False)
+    """Displays a filtered, up-to-date guide for all active DKP system commands."""
+    embed = discord.Embed(
+        title="⚔️ Old School RuneScape Clan DKP Bot Guide", 
+        color=discord.Color.blue()
+    )
+    
+    # Check if the user running the command is an Administrator
+    is_admin = ctx.author.guild_permissions.administrator
+
+    if is_admin:
+        admin_desc = (
+            "**!startevent <type> <pts> <days> <code>**\n"
+            "Opens a multi-day event window for self check-ins.\n\n"
+            "**!stopevent**\n"
+            "Manually terminates the current long-term event early.\n\n"
+            "**!startsignup <days> <campaign_name>**\n"
+            "Creates a Discord event and initializes a signup roster.\n"
+            "*Example:* `!startsignup 7 CoX Mass Campaign`\n\n"
+            "**!viewroster**\n"
+            "Displays the list of everyone registered for the campaign.\n\n"
+            "**!attendance <target> <type> <pts>**\n"
+            "Instantly awards points to an @Member, @Role, or \"VC Name\".\n\n"
+            "**!award <@member> <pts> [reason]**\n"
+            "Manually adds points to one specific player."
+        )
+        embed.add_field(name="🛡️ Admin Commands", value=admin_desc, inline=False)
+
+    public_desc = (
+        "**!signdkp**\n"
+        "Signs you up for the active clan campaign roster.\n\n"
+        "**!checkin <code>**\n"
+        "Claim your own event points using an active secret code.\n\n"
+        "**!buyrank <tier>**\n"
+        "Spend DKP to unlock an OSRS Clan Rank role.\n"
+        "*Example:* `!buyrank rune`\n\n"
+        "**!dkp [@member]**\n"
+        "Checks your point balance (or a tagged user's).\n\n"
+        "**!leaderboard**\n"
+        "Displays the top 10 highest-ranked clan members."
+    )
+    embed.add_field(name="👤 Member Commands", value=public_desc, inline=False)
+    
+    # Dynamically lists all the OSRS scimitar tiers and their math balances
+    shop_list = "\n".join([f"• **{info['name']}** — `{info['cost']} DKP`" for info in RANK_TIERS.values()])
+    embed.add_field(name="⚔️ Scimitar Rank Shop Prices", value=shop_list, inline=False)
+    
+    embed.set_footer(text="Valid event types: skilling, bossing, bingo, custom")
+    await ctx.send(embed=embed)
+
+# --- TRACKER DICTIONARY REGISTRATION ---
+# Keeps track of player user IDs signed up for active campaigns
+event_registrations = {
+    "active_campaign_name": None,
+    "signed_up_user_ids": []
+}
+
+@bot.command(name="startsignup")
+@commands.has_permissions(administrator=True)
+async def startsignup(ctx, days: int, *, campaign_name: str):
+    """Launches a native Discord Scheduled Event and initializes a tracked registration list."""
+    global event_registrations
+    import datetime
+    
+    clean_name = campaign_name.strip()
+    event_registrations["active_campaign_name"] = clean_name
+    event_registrations["signed_up_user_ids"] = []
+
+    # Calculate timestamps for the native Discord interface
+    now = datetime.datetime.now(datetime.timezone.utc)
+    future_start = now + datetime.timedelta(minutes=5)
+    future_end = now + datetime.timedelta(days=days)
+
+    # 1. Create a native Discord server calendar card event
+    try:
+        await ctx.guild.create_scheduled_event(
+            name=f"⚔️ {clean_name}",
+            description=f"Sign up now using '!signdkp' to reserve your clan track profile points!",
+            start_time=future_start,
+            end_time=future_end,
+            entity_type=discord.EntityType.external,
+            privacy_level=discord.PrivacyLevel.guild_only,
+            location="OSRS Clan Event Ground"
+        )
+    except Exception as event_err:
+        logging.warning(f"Native calendar creation skipped: {event_err}")
+
+    # 2. Post a tracking card into the text channel
+    embed = discord.Embed(title="📝 Clan Registration Open!", color=discord.Color.teal())
+    embed.description = (
+        f"A new campaign tracking roster has been opened for: **{clean_name}**\n\n"
+        f"👉 Type **`!signdkp`** in this channel to add your profile to the sign-up list!\n"
+        f"⏳ **Duration:** Roster collection closes in `{days} days`."
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="signdkp")
+async def signdkp(ctx):
+    """Allows a clan member to log their name onto the active event roster."""
+    global event_registrations
+    c_name = event_registrations["active_campaign_name"]
+    
+    if not c_name:
+        await ctx.send("❌ There is no active sign-up campaign running right now.")
+        return
+        
+    u_id = str(ctx.author.id)
+    if u_id in event_registrations["signed_up_user_ids"]:
+        await ctx.send("⚠️ You are already signed up on this campaign's roster!")
+        return
+
+    # Add to temporary storage list
+    event_registrations["signed_up_user_ids"].append(u_id)
+    
+    # Save the roster array modification down to a clean line in your log tracking histories
+    dkp_data = load_dkp_from_github() # Keeps your storage pipe hot
+    save_dkp_to_github(dkp_data, f"Roster Signup: {ctx.author.display_name} joined campaign '{c_name}'")
+    
+    await ctx.send(f"✅ **{ctx.author.display_name}**, you have successfully signed up for **{c_name}**!")
+
+
+@bot.command(name="viewroster")
+@commands.has_permissions(administrator=True)
+async def viewroster(ctx):
+    """Retrieves and lists every individual user who has successfully registered."""
+    c_name = event_registrations["active_campaign_name"]
+    if not c_name:
+        await ctx.send("⚠️ No active campaign roster found.")
+        return
+
+    user_ids = event_registrations["signed_up_user_ids"]
+    if not user_ids:
+        await ctx.send(f"📋 The roster for **{c_name}** is currently empty. No users have typed `!signdkp` yet.")
+        return
+
+    embed = discord.Embed(title=f"📋 Roster Sheet: {c_name}", color=discord.Color.purple())
+    member_list_text = ""
+    
+    # Parse numerical handles into display profiles
+    for idx, u_id in enumerate(user_ids, start=1):
+        m = ctx.guild.get_member(int(u_id))
+        name = m.display_name if m else f"User ID: {u_id}"
+        member_list_text += f"**#{idx}** {name}\n"
+
+    embed.description = member_list_text
+    embed.set_footer(text=f"Total Registrations: {len(user_ids)} clan members")
     await ctx.send(embed=embed)
 
 if __name__ == "__main__":
