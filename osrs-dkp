@@ -2,44 +2,45 @@ import discord
 from discord.ext import commands
 import json
 import os
+import logging
 from github import Github
 from datetime import datetime
 
-# --- CONFIGURATION ---
+# --- LOGGING SETUP (Standard for Google Cloud Logging) ---
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+# --- CONFIGURATION FROM ENVIRONMENT ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-GITHUB_REPO_NAME = os.getenv("GITHUB_REPO")  # Format: "username/repo-name"
+GITHUB_REPO_NAME = os.getenv("GITHUB_REPO")
 DATA_FILE = "dkp_data.json"
 LOG_FILE = "dkp_history.md"
 
 # --- EVENT MULTIPLIERS ---
-# Base attendance points are multiplied by these factors depending on the event
 EVENT_MULTIPLIERS = {
-    "skilling": 1.0,     # Base reward
-    "bossing": 1.5,      # 50% bonus for high-risk PvM
-    "bingo": 2.0,        # Double points for major clan events
-    "custom": 1.0        # Default fallback
+    "skilling": 1.0,
+    "bossing": 1.5,
+    "bingo": 2.0,
+    "custom": 1.0
 }
 
 # --- GITHUB HELPER FUNCTIONS ---
 def load_dkp_from_github():
-    """Fetches the latest DKP data from GitHub or initializes a new state."""
     try:
         g = Github(GITHUB_TOKEN)
         repo = g.get_repo(GITHUB_REPO_NAME)
         file_content = repo.get_contents(DATA_FILE)
         return json.loads(file_content.decoded_content.decode("utf-8"))
     except Exception as e:
-        print(f"Starting fresh DKP database. Error/Info: {e}")
+        logging.warning(f"Starting fresh DKP database. Info: {e}")
         return {}
 
 def save_dkp_to_github(data, log_entry=None):
-    """Commits updated data and appends an audit log entry to GitHub."""
     try:
         g = Github(GITHUB_TOKEN)
         repo = g.get_repo(GITHUB_REPO_NAME)
         
-        # 1. Update the JSON Database
+        # Update JSON State
         json_content = json.dumps(data, indent=4)
         try:
             file = repo.get_contents(DATA_FILE)
@@ -47,21 +48,21 @@ def save_dkp_to_github(data, log_entry=None):
         except Exception:
             repo.create_file(DATA_FILE, "Initialize DKP database", json_content)
             
-        # 2. Append to Markdown Audit Log (Optional but highly recommended for tracking)
+        # Append to Audit Log
         if log_entry:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
             new_log_text = f"## [{timestamp}] {log_entry}\n\n"
             try:
                 log_file = repo.get_contents(LOG_FILE)
                 existing_log = log_file.decoded_content.decode("utf-8")
-                updated_log = new_log_text + existing_log # Newest logs always on top
+                updated_log = new_log_text + existing_log
                 repo.update_file(log_file.path, "Append DKP audit log", updated_log, log_file.sha)
             except Exception:
                 repo.create_file(LOG_FILE, "Initialize DKP audit log", new_log_text)
 
-        print("Successfully synced data and logs to GitHub!")
+        logging.info("Successfully synced data and logs to GitHub repository.")
     except Exception as e:
-        print(f"Failed to sync with GitHub: {e}")
+        logging.error(f"Failed to sync data modifications with GitHub: {e}")
 
 # --- BOT SETUP ---
 intents = discord.Intents.default()
@@ -73,16 +74,13 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user.name} | Multiplier System Active")
+    logging.info(f"Bot connected to Discord gateway as {bot.user.name}")
 
 # --- COMMANDS ---
 
 @bot.command(name="attendance")
 @commands.has_permissions(administrator=True)
 async def attendance(ctx, channel_id: int, event_type: str, base_points: int):
-    """Awards multiplier-calculated DKP to everyone in a voice channel.
-    Usage: !attendance 123456789 bossing 10
-    """
     event_type = event_type.lower()
     if event_type not in EVENT_MULTIPLIERS:
         valid_types = ", ".join(EVENT_MULTIPLIERS.keys())
@@ -94,7 +92,6 @@ async def attendance(ctx, channel_id: int, event_type: str, base_points: int):
         await ctx.send("❌ Invalid Voice Channel ID.")
         return
 
-    # Calculate final scaled points using Python's round function to handle floats cleanly
     multiplier = EVENT_MULTIPLIERS[event_type]
     final_points = round(base_points * multiplier)
 
@@ -113,7 +110,7 @@ async def attendance(ctx, channel_id: int, event_type: str, base_points: int):
         
         embed = discord.Embed(title="🎙️ Voice Attendance Logged", color=discord.Color.green())
         embed.add_field(name="Event Type", value=f"{event_type.capitalize()} (x{multiplier})", inline=True)
-        embed.add_field(name="Points Given", value=f"**{final_points} DKP** (Base: {base_points})", inline=True)
+        embed.add_field(name="Points Given", value=f"**{final_points} DKP**", inline=True)
         embed.add_field(name="Attendees", value=f"{len(rewarded)} clan members", inline=False)
         await ctx.send(embed=embed)
     else:
@@ -122,7 +119,6 @@ async def attendance(ctx, channel_id: int, event_type: str, base_points: int):
 @bot.command(name="award")
 @commands.has_permissions(administrator=True)
 async def award(ctx, member: discord.Member, points: int, *, reason: str = "Significant Event"):
-    """Manually awards fixed flat points to a single user (e.g. Pole Positions, MVPs)."""
     dkp_data = load_dkp_from_github()
     user_id = str(member.id)
     
@@ -134,7 +130,6 @@ async def award(ctx, member: discord.Member, points: int, *, reason: str = "Sign
 
 @bot.command(name="spend")
 async def spend(ctx, amount: int, *, item: str):
-    """Allows a clan member to spend their accumulated points on items/rewards."""
     if amount <= 0:
         await ctx.send("❌ You must spend an amount greater than 0.")
         return
@@ -147,7 +142,6 @@ async def spend(ctx, amount: int, *, item: str):
         await ctx.send(f"❌ Insufficient funds. You need `{amount} DKP` but only have `{current_balance} DKP`.")
         return
 
-    # Deduct points
     dkp_data[user_id] = current_balance - amount
     log_msg = f"Purchase: {ctx.author.display_name} spent {amount} DKP on '{item}'"
     save_dkp_to_github(dkp_data, log_msg)
@@ -157,28 +151,23 @@ async def spend(ctx, amount: int, *, item: str):
     embed.add_field(name="Item Purchased", value=item, inline=True)
     embed.add_field(name="Cost", value=f"`{amount} DKP`", inline=True)
     embed.add_field(name="Remaining Balance", value=f"`{dkp_data[user_id]} DKP`", inline=True)
-    
     await ctx.send(embed=embed)
 
 @bot.command(name="dkp")
 async def dkp(ctx, member: discord.Member = None):
-    """Checks the current balance of yourself or another user."""
     target = member or ctx.author
     dkp_data = load_dkp_from_github()
     balance = dkp_data.get(str(target.id), 0)
-    
     await ctx.send(f"📊 **{target.display_name}** currently has **{balance} DKP**.")
 
 @bot.command(name="leaderboard")
 async def leaderboard(ctx):
-    """Displays the top 10 clan members on the leaderboard."""
     dkp_data = load_dkp_from_github()
     if not dkp_data:
         await ctx.send("The DKP database is currently empty.")
         return
 
     sorted_dkp = sorted(dkp_data.items(), key=lambda item: item[1], reverse=True)
-    
     embed = discord.Embed(title="🏆 Clan DKP Leaderboard", color=discord.Color.gold())
     description = ""
     
@@ -190,5 +179,8 @@ async def leaderboard(ctx):
     embed.description = description
     await ctx.send(embed=embed)
 
-# Run the Bot
-bot.run(DISCORD_TOKEN)
+if __name__ == "__main__":
+    if not DISCORD_TOKEN or not GITHUB_TOKEN or not GITHUB_REPO_NAME:
+        logging.critical("Missing required environment variables. Cloud initialization aborted.")
+    else:
+        bot.run(DISCORD_TOKEN)
