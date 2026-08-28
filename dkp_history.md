@@ -1,3 +1,5 @@
+## [2026-08-28 05:32] Self-Checkin: Joehaiyo +100 DKP
+
 ## [2026-08-28 05:24] Event via Team 2. Given 10 DKP to: Joehaiyo
 
 ## [2026-08-28 05:22] Event via raider. Given 15 DKP to: Joehaiyo
