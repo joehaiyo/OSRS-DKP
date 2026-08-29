@@ -1,6 +1,8 @@
 {
     "active_campaign_name": "bossing",
     "discord_event_id": 1543065861139464202,
-    "signed_up_user_ids": [],
+    "signed_up_user_ids": [
+        "193213482609410048"
+    ],
     "signup_message_id": null
 }
