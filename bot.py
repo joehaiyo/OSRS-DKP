@@ -443,30 +443,55 @@ async def fullroster(ctx):
 
 @bot.command(name="helpmenu")
 async def helpmenu(ctx):
-    embed = discord.Embed(title="⚔️ Old School RuneScape Clan DKP Bot Guide", color=discord.Color.blue())
-    if ctx.author.guild_permissions.administrator:
+    """Displays a filtered, up-to-date guide for all active DKP system commands."""
+    embed = discord.Embed(
+        title="⚔️ Old School RuneScape Clan DKP Bot Guide", 
+        color=discord.Color.blue()
+    )
+    
+    is_admin = ctx.author.guild_permissions.administrator
+
+    if is_admin:
         admin_desc = (
-            "**!startevent <type> <pts> <days> <code>**\nOpens a multi-day event window.\n\n"
-            "**!vieweventmembers**\nLists members who signed up for the active event.\n\n"
-            "**!stopevent**\nTerminates the current event/campaign early.\n\n"
-            "**!startsignup <days> <campaign_name>**\nInitializes a signup roster.\n\n"
-            "**!viewroster**\nDisplays everyone registered for the campaign.\n\n"
-            "**!fullroster**\nGenerates a ranked list of all members, including 0 pointers.\n\n"
-            "**!attendance <target> <type> <pts>**\nAwards points to an @Member, @Role, or \"VC Name\".\n\n"
-            "**!award <@member> <pts> [reason]**\nManually adds points to a specific player."
+            "**!startevent <type> <pts> <days> <code>**\n"
+            "Opens a multi-day event window for self check-ins.\n\n"
+            "**!vieweventmembers**\n"
+            "Lists all members who checked into the active event.\n\n"
+            "**!stopevent**\n"
+            "Closes active events or clears the live campaign roster.\n\n"
+            "**!startsignup <days> <campaign_name>**\n"
+            "Initializes an interactive, live-updating channel signup card.\n\n"
+            "**!viewroster**\n"
+            "Displays the active registration list backup file sheet.\n\n"
+            "**!fullroster**\n"
+            "Generates a ranked list of all server members, including 0 pointers.\n\n"
+            "**!attendance <target> <type> <pts>**\n"
+            "Awards points to an @Member, @Role, or \"VC Name\".\n\n"
+            "**!award <@member> <pts> [reason]**\n"
+            "Manually adds points to one specific player."
         )
         embed.add_field(name="🛡️ Admin Commands", value=admin_desc, inline=False)
+
     public_desc = (
-        "**!registerevent**\nSigns you up for the running long-term event roster.\n\n"
-        "**!checkin <code>**\nClaim event points using an active secret code.\n\n"
-        "**!signdkp**\nSigns you up for the active clan campaign roster.\n\n"
-        "**!buyrank <tier>**\nSpend DKP to unlock an OSRS Clan Rank role.\n\n"
-        "**!dkp [@member]**\nChecks point balances.\n\n"
-        "**!leaderboard**\nDisplays the top 10 clan point earners."
+        "**!signdkp**\n"
+        "Signs you up and injects your name into the live channel roster.\n\n"
+        "**!registerevent**\n"
+        "Signs you up for the currently active event check-in list.\n\n"
+        "**!checkin <code>**\n"
+        "Claim your own event points using an active secret code.\n\n"
+        "**!buyrank <tier>**\n"
+        "Spend DKP to unlock an OSRS Clan Rank role.\n"
+        "*Example:* `!buyrank rune`\n\n"
+        "**!dkp [@member]**\n"
+        "Checks your point balance (or a tagged user's).\n\n"
+        "**!leaderboard**\n"
+        "Displays the top 10 highest-ranked clan members."
     )
     embed.add_field(name="👤 Member Commands", value=public_desc, inline=False)
+    
     shop_list = "\n".join([f"• **{info['name']}** — `{info['cost']} DKP`" for info in RANK_TIERS.values()])
     embed.add_field(name="⚔️ Scimitar Rank Shop Prices", value=shop_list, inline=False)
+    
     embed.set_footer(text="Valid event types: skilling, bossing, bingo, custom")
     await ctx.send(embed=embed)
 
