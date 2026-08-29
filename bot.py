@@ -124,6 +124,7 @@ def save_roster_to_github(data):
     except Exception as e:
         logging.error(f"CRITICAL Roster Sync Fail: {e}")
 
+# --- INTENTS SETUP BLOCK ---
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -135,7 +136,7 @@ async def on_ready():
     global event_registrations
     logging.info(f"Bot online as {bot.user.name}")
     event_registrations = load_roster_from_github()
-
+    
 @bot.command(name="attendance")
 @commands.has_permissions(administrator=True)
 async def attendance(ctx, target: Union[discord.VoiceChannel, discord.Role, discord.Member], event_type: str, base_points: int):
