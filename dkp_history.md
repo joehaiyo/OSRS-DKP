@@ -1,3 +1,5 @@
+## [2026-08-29 01:10] Roster Signup: Joehaiyo joined campaign 'Shoots&LaddersBingo'
+
 ## [2026-08-29 00:48] Rank Promo: Joehaiyo -> Dragon Scimitar
 
 ## [2026-08-29 00:46] Award: Joehaiyo +10000 DKP (cuz)
