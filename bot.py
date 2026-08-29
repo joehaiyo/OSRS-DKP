@@ -25,8 +25,14 @@ ROSTER_FILE = "campaign_roster.json"
 
 EVENT_MULTIPLIERS = {
     "skilling": 1.0,
+    "sotw": 1.2,      # Skill of the Week modifier
     "bossing": 1.5,
+    "botw": 1.5,      # Boss of the Week modifier
+    "cox": 1.5,       # Chambers of Xeric modifier
+    "zulcano": 1.5,   # Zalcano modifier
+    "tob": 1.8,       # Theatre of Blood modifier (higher difficulty)
     "bingo": 2.0,
+    "toa": 1.3,       # Tombs of Ass modifier (low difficulty)
     "custom": 1.0
 }
 
