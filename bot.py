@@ -124,11 +124,15 @@ def save_roster_to_github(data):
     except Exception as e:
         logging.error(f"CRITICAL Roster Sync Fail: {e}")
 
-# --- INTENTS SETUP BLOCK ---
+# 1. Initialize the master configuration blueprint object
 intents = discord.Intents.default()
+
+# 2. Add individual flag properties to that blueprint object
 intents.message_content = True
 intents.members = True
 intents.voice_states = True
+
+# 3. Pass the completed blueprint object into the bot instance creator
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
