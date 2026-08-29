@@ -7,6 +7,8 @@
         "campaign_display_name": "Cox Mass",
         "discord_event_id": 1543077176264491078,
         "signup_message_id": 1543077182149107785,
-        "signed_up_user_ids": []
+        "signed_up_user_ids": [
+            "193213482609410048"
+        ]
     }
 }
