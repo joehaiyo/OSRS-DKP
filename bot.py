@@ -102,6 +102,8 @@ def save_dkp_to_github(data, log_entry=None):
     except Exception as e:
         logging.error(f"CRITICAL GitHub Sync Fail: {e}")
 
+ROSTER_FILE = "campaign_roster.json"
+
 def load_roster_from_github():
     try:
         g = Github(GITHUB_TOKEN)
@@ -109,7 +111,8 @@ def load_roster_from_github():
         file_content = repo.get_contents(ROSTER_FILE)
         return json.loads(file_content.decoded_content.decode("utf-8"))
     except Exception:
-        return {"active_campaign_name": None, "discord_event_id": None, "signed_up_user_ids": []}
+        # Returns an empty database dictionary designed to hold multiple events concurrently
+        return {}
 
 def save_roster_to_github(data):
     try:
@@ -118,9 +121,9 @@ def save_roster_to_github(data):
         json_content = json.dumps(data, indent=4)
         try:
             file = repo.get_contents(ROSTER_FILE)
-            repo.update_file(file.path, "Update campaign roster", json_content, file.sha)
+            repo.update_file(file.path, "Update concurrent campaign rosters", json_content, file.sha)
         except Exception:
-            repo.create_file(ROSTER_FILE, "Initialize campaign roster", json_content)
+            repo.create_file(ROSTER_FILE, "Initialize concurrent campaign rosters", json_content)
     except Exception as e:
         logging.error(f"CRITICAL Roster Sync Fail: {e}")
 
@@ -239,73 +242,94 @@ async def vieweventmembers(ctx):
 @bot.command(name="startsignup")
 @commands.has_permissions(administrator=True)
 async def startsignup(ctx, days: int, *, campaign_name: str):
+    """Initializes an independent, live-updating signup campaign roster."""
     global event_registrations
     import datetime
-    clean_name = campaign_name.strip()
-    event_registrations["active_campaign_name"] = clean_name
-    event_registrations["signed_up_user_ids"] = []
+    
+    clean_name = campaign_name.strip().lower()
+    
+    # Reload active rosters to pull other live events
+    event_registrations = load_roster_from_github()
+    
+    if clean_name in event_registrations:
+        await ctx.send(f"⚠️ A campaign named '{campaign_name}' is already running!")
+        return
+
+    # Calculate timestamps for the native Discord interface
     now = datetime.datetime.now(datetime.timezone.utc)
     future_start = now + datetime.timedelta(minutes=5)
     future_end = now + datetime.timedelta(days=days)
+
+    # 1. Create a native Discord server calendar card event
+    event_id = None
     try:
         new_event = await ctx.guild.create_scheduled_event(
-            name=f"⚔️ {clean_name}",
-            description="Sign up now using '!signdkp' to reserve your clan track profile points!",
+            name=f"⚔️ {campaign_name}",
+            description=f"Sign up using '!signdkp {campaign_name}'!",
             start_time=future_start,
             end_time=future_end,
             entity_type=discord.EntityType.external,
             privacy_level=discord.PrivacyLevel.guild_only,
             location="OSRS Clan Event Ground"
         )
-        event_registrations["discord_event_id"] = new_event.id
+        event_id = new_event.id
     except Exception as event_err:
-        event_registrations["discord_event_id"] = None
         logging.warning(f"Native calendar creation skipped: {event_err}")
+
+    # 2. Build the initial empty card embed layout
+    embed = discord.Embed(title=f"📝 Campaign Roster: {campaign_name}", color=discord.Color.teal())
+    embed.description = f"👉 Type **`!signdkp {campaign_name}`** in this channel to add your name!"
+    embed.add_field(name="👥 Signed Up Members (0)", value="* Roster is currently empty *", inline=False)
+    embed.set_footer(text=f"⏳ Collection window closes in {days} days.")
+    
+    sent_card = await ctx.send(embed=embed)
+
+    # 3. Store this unique campaign nested inside the master file map structure
+    event_registrations[clean_name] = {
+        "campaign_display_name": campaign_name,
+        "discord_event_id": event_id,
+        "signup_message_id": sent_card.id,
+        "signed_up_user_ids": []
+    }
     save_roster_to_github(event_registrations)
-    embed = discord.Embed(title="📝 Clan Registration Open!", color=discord.Color.teal())
-    embed.description = (
-        f"A new campaign tracking roster has been opened for: **{clean_name}**\n\n"
-        f"👉 Type **`!signdkp`** in this channel to add your profile to the sign-up list!\n"
-        f"⏳ **Duration:** Roster collection closes in `{days} days`."
-    )
-    await ctx.send(embed=embed)
 
 @bot.command(name="signdkp")
-async def signdkp(ctx):
-    """Logs a member into the campaign roster, updates the embed card, and assigns the active roster role."""
+async def signdkp(ctx, *, campaign_name: str):
+    """Logs a member into a specific campaign roster and dynamically updates its channel card."""
     global event_registrations
-    c_name = event_registrations["active_campaign_name"]
-    msg_id = event_registrations.get("signup_message_id")
+    clean_name = campaign_name.strip().lower()
     
-    if not c_name:
-        await ctx.send("❌ There is no active sign-up campaign running right now.")
+    event_registrations = load_roster_from_github()
+    
+    if clean_name not in event_registrations:
+        await ctx.send(f"❌ No active campaign found named '{campaign_name}'.")
         return
 
+    campaign_data = event_registrations[clean_name]
     u_id = str(ctx.author.id)
-    if u_id in event_registrations["signed_up_user_ids"]:
-        await ctx.send("⚠️ You are already signed up on this campaign's roster!")
+    
+    if u_id in campaign_data["signed_up_user_ids"]:
+        await ctx.send(f"⚠️ You are already signed up for the '{campaign_data['campaign_display_name']}' roster!")
         return
 
-    # 1. Fetch the visual tracking role (Create a server role named exactly 'Attending Event')
-    roster_role = discord.utils.get(ctx.guild.roles, name="Attending Event")
-    if not roster_role:
-        await ctx.send("❌ Error: The server role **'Attending Event'** does not exist. Please create it.")
-        return
+    # 1. Look for a matching custom tracking role on the server sidebar
+    roster_role = discord.utils.get(ctx.guild.roles, name=campaign_data["campaign_display_name"])
 
-    event_registrations["signed_up_user_ids"].append(u_id)
+    campaign_data["signed_up_user_ids"].append(u_id)
     save_roster_to_github(event_registrations)
 
     dkp_data = load_dkp_from_github()
-    save_dkp_to_github(dkp_data, f"Roster Signup: {ctx.author.display_name} joined campaign '{c_name}'")
+    save_dkp_to_github(dkp_data, f"Roster Signup: {ctx.author.display_name} joined '{campaign_data['campaign_display_name']}'")
 
-    # Rebuild the name list for the channel embed card
+    # Rebuild roster list nicknames
     roster_names = []
-    for member_id in event_registrations["signed_up_user_ids"]:
+    for member_id in campaign_data["signed_up_user_ids"]:
         m = ctx.guild.get_member(int(member_id))
         if m:
             roster_names.append(f"• {m.display_name}")
 
-    # Edit the channel message card in real-time
+    # 2. Dynamically locate and edit the specific channel chat card embed
+    msg_id = campaign_data.get("signup_message_id")
     if msg_id:
         try:
             target_message = await ctx.channel.fetch_message(int(msg_id))
@@ -313,62 +337,82 @@ async def signdkp(ctx):
                 old_embed = target_message.embeds[0]
                 new_embed = discord.Embed(title=old_embed.title, color=old_embed.color, description=old_embed.description)
                 new_embed.set_footer(text=old_embed.footer.text)
+                
                 roster_value = "\n".join(roster_names) if roster_names else "* Roster is currently empty *"
                 new_embed.add_field(name=f"👥 Signed Up Members ({len(roster_names)})", value=roster_value, inline=False)
+                
                 await target_message.edit(embed=new_embed)
         except Exception as embed_err:
-            logging.warning(f"Could not update embed card: {embed_err}")
+            logging.warning(f"Could not update target embed card: {embed_err}")
 
-    # 2. Automatically grant the member the 'Attending Event' role
-    try:
-        await ctx.author.add_roles(roster_role)
-    except discord.Forbidden:
-        await ctx.send("⚠️ Failed to assign role: Drag the Bot's server role above the 'Attending Event' role.")
+    # 3. Grant the role if an admin created a role with the exact name of the event
+    if roster_role:
+        try:
+            await ctx.author.add_roles(roster_role)
+        except discord.Forbidden:
+            pass
 
-    await ctx.send(f"✅ **{ctx.author.display_name}**, you have successfully signed up for **{c_name}**!")
+    await ctx.send(f"✅ **{ctx.author.display_name}**, you signed up for **{campaign_data['campaign_display_name']}**!")
 
 @bot.command(name="viewroster")
 @commands.has_permissions(administrator=True)
-async def viewroster(ctx):
+async def viewroster(ctx, *, campaign_name: str):
+    """Retrieves and lists every individual user registered for a targeted campaign."""
     global event_registrations
-    c_name = event_registrations["active_campaign_name"]
-    if not c_name:
-        await ctx.send("⚠️ No active campaign roster found.")
+    clean_name = campaign_name.strip().lower()
+    
+    event_registrations = load_roster_from_github()
+    
+    if clean_name not in event_registrations:
+        await ctx.send(f"❌ No active campaign roster found named '{campaign_name}'.")
         return
-    user_ids = event_registrations["signed_up_user_ids"]
+
+    campaign_data = event_registrations[clean_name]
+    user_ids = campaign_data["signed_up_user_ids"]
+    
     if not user_ids:
-        await ctx.send(f"📋 The roster for **{c_name}** is currently empty. No users have typed `!signdkp` yet.")
+        await ctx.send(f"📋 The roster for **{campaign_data['campaign_display_name']}** is empty.")
         return
-    embed = discord.Embed(title=f"📋 Roster Sheet: {c_name}", color=discord.Color.purple())
+
+    embed = discord.Embed(title=f"📋 Roster Sheet: {campaign_data['campaign_display_name']}", color=discord.Color.purple())
     member_list_text = ""
     for idx, u_id in enumerate(user_ids, start=1):
         m = ctx.guild.get_member(int(u_id))
         name = m.display_name if m else f"User ID: {u_id}"
         member_list_text += f"**#{idx}** {name}\n"
+
     embed.description = member_list_text
     embed.set_footer(text=f"Total Registrations: {len(user_ids)} clan members")
     await ctx.send(embed=embed)
 
 @bot.command(name="stopevent")
 @commands.has_permissions(administrator=True)
-async def stopevent(ctx):
-    """Manually terminates active check-in events or signup campaigns, automatically cleaning server roles."""
+async def stopevent(ctx, *, target_name: str = None):
+    """Terminates a specific check-in code window, or closes a targeted multi-day campaign."""
     global active_event, event_registrations
+    
+    if not target_name:
+        await ctx.send("❌ Please specify what you want to stop!\n*Usage:* `!stopevent <code>` or `!stopevent <campaign_name>`")
+        return
 
-    # Case 1: Close active short/long-term check-in events
-    if active_event["secret_code"]:
+    clean_target = target_name.strip().lower()
+
+    # Case 1: Close active check-in codes matching the target input
+    if active_event["secret_code"] and active_event["secret_code"] == clean_target:
         closed_code = active_event["secret_code"]
         active_event["secret_code"] = None
         active_event["registered_users"] = []
-        await ctx.send(f"🛑 Closed event code `{closed_code}`.")
+        await ctx.send(f"🛑 Closed check-in event code `{closed_code}`.")
         return
 
-    # Case 2: Close active registration/signup campaigns and strip side-panel tracking roles
-    if event_registrations["active_campaign_name"]:
-        campaign = event_registrations["active_campaign_name"]
-        event_id = event_registrations.get("discord_event_id")
+    # Case 2: Close active registration campaign matching the target input name
+    event_registrations = load_roster_from_github()
+    if clean_target in event_registrations:
+        campaign_data = event_registrations[clean_target]
+        display_name = campaign_data["campaign_display_name"]
+        event_id = campaign_data.get("discord_event_id")
 
-        # Delete native calendar card if it exists
+        # Delete native calendar card
         if event_id:
             try:
                 discord_event = ctx.guild.get_scheduled_event(int(event_id))
@@ -377,29 +421,25 @@ async def stopevent(ctx):
             except Exception as delete_err:
                 logging.warning(f"Could not delete calendar card: {delete_err}")
 
-        # 1. Automatically strip the role away from everyone who was signed up
-        roster_role = discord.utils.get(ctx.guild.roles, name="Attending Event")
+        # Strip custom matching side-panel role from participants if it exists
+        roster_role = discord.utils.get(ctx.guild.roles, name=display_name)
         if roster_role:
             try:
-                for member_id in event_registrations["signed_up_user_ids"]:
+                for member_id in campaign_data["signed_up_user_ids"]:
                     member = ctx.guild.get_member(int(member_id))
                     if member and roster_role in member.roles:
                         await member.remove_roles(roster_role)
-                logging.info("Successfully cleaned up campaign side-panel tracking roles.")
             except Exception as role_err:
-                logging.warning(f"Could not bulk-remove event roles: {role_err}")
+                logging.warning(f"Could not remove event roles: {role_err}")
 
-        # Reset memory variables and clear the database file on GitHub
-        event_registrations["active_campaign_name"] = None
-        event_registrations["discord_event_id"] = None
-        event_registrations["signup_message_id"] = None
-        event_registrations["signed_up_user_ids"] = []
+        # Remove only this single campaign from the database and save the rest
+        del event_registrations[clean_target]
         save_roster_to_github(event_registrations)
         
-        await ctx.send(f"🛑 Closed signup campaign '{campaign}' and cleared all active side-panel roles.")
+        await ctx.send(f"🛑 Closed signup campaign '{display_name}' and cleared its associated lists and roles.")
         return
 
-    await ctx.send("⚠️ No active event or signup campaign running.")
+    await ctx.send(f"⚠️ No active check-in code or campaign roster found matching '{target_name}'.")
 
 @bot.command(name="checkin")
 async def checkin(ctx, code: str):
@@ -519,27 +559,31 @@ async def helpmenu(ctx):
             "**!startevent <type> <pts> <days> <code>**\n"
             "Opens a multi-day event window for self check-ins.\n\n"
             "**!vieweventmembers**\n"
-            "Lists all members who checked into the active event.\n\n"
-            "**!stopevent**\n"
-            "Closes active events or clears the live campaign roster.\n\n"
+            "Lists all members who signed up for the active check-in event.\n\n"
             "**!startsignup <days> <campaign_name>**\n"
-            "Initializes an interactive, live-updating channel signup card.\n\n"
-            "**!viewroster**\n"
-            "Displays the active registration list backup file sheet.\n\n"
+            "Launches an independent, live-updating signup card.\n"
+            "*Example:* `!startsignup 7 Bingo`\n\n"
+            "**!viewroster <campaign_name>**\n"
+            "Displays the active signup roster for a targeted campaign.\n"
+            "*Example:* `!viewroster Bingo`\n\n"
+            "**!stopevent <name_or_code>**\n"
+            "Closes an active check-in code OR terminates a campaign roster.\n"
+            "*Example:* `!stopevent Bingo`\n\n"
             "**!fullroster**\n"
             "Generates a ranked list of all server members, including 0 pointers.\n\n"
             "**!attendance <target> <type> <pts>**\n"
-            "Awards points to an @Member, @Role, or \"VC Name\".\n\n"
+            "Instantly awards points to an @Member, @Role, or \"VC Name\".\n\n"
             "**!award <@member> <pts> [reason]**\n"
             "Manually adds points to one specific player."
         )
         embed.add_field(name="🛡️ Admin Commands", value=admin_desc, inline=False)
 
     public_desc = (
-        "**!signdkp**\n"
-        "Signs you up and injects your name into the live channel roster.\n\n"
+        "**!signdkp <campaign_name>**\n"
+        "Signs you up for a specific active campaign roster.\n"
+        "*Example:* `!signdkp Bingo`\n\n"
         "**!registerevent**\n"
-        "Signs you up for the currently active event check-in list.\n\n"
+        "Signs you up for the running long-term event check-in list.\n\n"
         "**!checkin <code>**\n"
         "Claim your own event points using an active secret code.\n\n"
         "**!buyrank <tier>**\n"
@@ -557,7 +601,7 @@ async def helpmenu(ctx):
     
     embed.set_footer(text="Valid event types: skilling, bossing, bingo, custom")
     await ctx.send(embed=embed)
-
+    
 def start_bot_thread():
     bot.run(DISCORD_TOKEN)
 
