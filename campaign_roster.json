@@ -1,8 +1,5 @@
 {
-    "active_campaign_name": "wildy bossing",
-    "discord_event_id": 1543056828387295274,
-    "signed_up_user_ids": [
-        "193213482609410048",
-        "412664770643230720"
-    ]
+    "active_campaign_name": null,
+    "discord_event_id": null,
+    "signed_up_user_ids": []
 }
