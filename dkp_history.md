@@ -1,3 +1,5 @@
+## [2026-08-29 00:46] Award: Joehaiyo +10000 DKP (cuz)
+
 ## [2026-08-29 00:38] Roster Signup: Punch joined campaign 'wildy bossing'
 
 ## [2026-08-29 00:37] Roster Signup: Joehaiyo joined campaign 'wildy bossing'
