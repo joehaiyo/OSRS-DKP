@@ -1,3 +1,5 @@
+## [2026-08-29 01:14] Roster Signup: Joehaiyo joined campaign 'bossing'
+
 ## [2026-08-29 01:10] Roster Signup: weeka joined campaign 'Shoots&LaddersBingo'
 
 ## [2026-08-29 01:10] Roster Signup: Joehaiyo joined campaign 'Shoots&LaddersBingo'
