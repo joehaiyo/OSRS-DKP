@@ -15,6 +15,8 @@
         "campaign_display_name": "Tob Learner",
         "discord_event_id": 1543077776230453249,
         "signup_message_id": 1543077784740438113,
-        "signed_up_user_ids": []
+        "signed_up_user_ids": [
+            "193213482609410048"
+        ]
     }
 }
