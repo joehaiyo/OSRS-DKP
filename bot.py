@@ -66,6 +66,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         return
 
 def run_health_server():
+    logging.info(f"Starting Health Server on port {PORT}...")
     server = HTTPServer(("0.0.0.0", PORT), HealthCheckHandler)
     server.serve_forever()
 
@@ -122,8 +123,8 @@ def save_roster_to_github(data):
             repo.create_file(ROSTER_FILE, "Initialize campaign roster", json_content)
     except Exception as e:
         logging.error(f"CRITICAL Roster Sync Fail: {e}")
-        intents = discord.Intents.default()
 
+intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.voice_states = True
@@ -464,9 +465,15 @@ async def helpmenu(ctx):
     embed.set_footer(text="Valid event types: skilling, bossing, bingo, custom")
     await ctx.send(embed=embed)
 
+def start_bot_thread():
+    bot.run(DISCORD_TOKEN)
+
 if __name__ == "__main__":
     if DISCORD_TOKEN and GITHUB_TOKEN and GITHUB_REPO_NAME:
-        t = threading.Thread(target=run_health_server, daemon=True)
-        t.start()
-        time.sleep(2)
-        bot.run(DISCORD_TOKEN)
+        # 1. Start the health server IMMEDIATELY on the main thread so port 8080 opens instantly
+        # 2. Push the heavy blocking Discord loop onto a safe background worker thread
+        logging.info("Initializing reverse-boot architecture...")
+        bot_worker = threading.Thread(target=start_bot_thread, daemon=True)
+        bot_worker.start()
+        
+        run_health_server()
